@@ -1,0 +1,171 @@
+{
+  "name": "power-glove",
+  "displayName": "Power Glove",
+  "author": "Mateusz Matt Szymonski <mattszymonski@gmail.com>",
+  "description": "Compact command-runner with per-machine overrides.",
+  "version": "1.0.0",
+  "publisher": "MattSzymonski",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MattSzymonski/Power-Glove"
+  },
+  "license": "MIT",
+  "icon": "media/power_glove_icon_128.png",
+  "keywords": [
+    "vscode",
+    "extension",
+    "commands",
+    "cli",
+    "runner",
+    "actions"
+  ],
+  "engines": {
+    "vscode": "^1.116.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "powerGlove.openUI",
+        "title": "Power Glove: Open"
+      },
+      {
+        "command": "powerGlove.openManager",
+        "title": "Power Glove: Manage Commands"
+      },
+      {
+        "command": "powerGlove.runInCurrentTerminal",
+        "title": "Power Glove: Run In Current Terminal"
+      },
+      {
+        "command": "powerGlove.runInNewTerminal",
+        "title": "Power Glove: Run In New Terminal"
+      }
+    ],
+    "configuration": {
+      "title": "Power Glove",
+      "properties": {
+        "powerGlove.machines": {
+          "type": "array",
+          "default": [],
+          "description": "Known machines.",
+          "items": {
+            "type": "object",
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "powerGlove.commands": {
+          "type": "array",
+          "default": [],
+          "description": "Commands to expose in the Power Glove popup.",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "command"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string",
+                "default": "",
+                "description": "Optional human-readable description shown next to the command."
+              },
+              "project": {
+                "type": "string",
+                "default": "",
+                "description": "Substring that must be present in the opened workspace folder path. Empty = always show."
+              },
+              "directory": {
+                "type": "string",
+                "default": ""
+              },
+              "command": {
+                "type": "string"
+              },
+              "machineSettings": {
+                "type": "array",
+                "default": [],
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "machineName"
+                  ],
+                  "properties": {
+                    "machineName": {
+                      "type": "string"
+                    },
+                    "show": {
+                      "type": "boolean",
+                      "default": true
+                    },
+                    "overrides": {
+                      "type": "array",
+                      "default": [],
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "key",
+                          "value"
+                        ],
+                        "properties": {
+                          "key": {
+                            "type": "string"
+                          },
+                          "value": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "npm run check-types && npm run lint && node esbuild.js",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "npm run check-types && npm run lint && node esbuild.js --production",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "22.x",
+    "@types/vscode": "^1.116.0",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2",
+    "esbuild": "^0.27.3",
+    "eslint": "^9.39.3",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.56.1"
+  }
+}
