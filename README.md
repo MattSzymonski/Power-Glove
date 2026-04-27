@@ -12,33 +12,33 @@ VS Code extension for defining and running reusable shell commands from a single
 
 Run any of your saved shell commands from a single Quick Pick popup.
 
-- **Open Picker** — Run `Power Glove: Open` from the Command Palette (recommended: bind it to a hotkey such as `Ctrl+Alt+P`).
-- **Run In Current Terminal** — Press `Enter` on a selection, or click the `play` button on the row, to send the command to the active terminal (a fresh terminal is created if none is open).
-- **Run In New Terminal** — Click the `terminal-new` button on a row to spawn a dedicated terminal named `Power Glove: <command>`.
-- **Grouping** — Commands are grouped by their `project` field, with a `(general)` section for commands that have no project.
-- **Search** — Picker matching covers the command name, description, and the resolved shell command line.
-- **Manage shortcut** — A gear button in the picker title bar opens the Commands Manager.
+- **Open Picker** - Run `Power Glove: Open` from the Command Palette (recommended: bind it to a hotkey such as `Ctrl+Alt+P`).
+- **Run In Current Terminal** - Press `Enter` on a selection, or click the `play` button on the row, to send the command to the active terminal (a fresh terminal is created if none is open).
+- **Run In New Terminal** - Click the `terminal-new` button on a row to spawn a dedicated terminal named `Power Glove: <command>`.
+- **Grouping** - Commands are grouped by their `project` field, with a `(general)` section for commands that have no project.
+- **Search** - Picker matching covers the command name, description, and the resolved shell command line.
+- **Manage shortcut** - A gear button in the picker title bar opens the Commands Manager.
 
 ### Commands Manager
 
 A webview that lets you edit `powerGlove.commands` without hand-editing JSON.
 
-- **Open Manager** — Run `Power Glove: Manage Commands` from the Command Palette, or click the gear button in the picker.
-- **Add / Edit** — Use `+ New command` to append a new entry. Click any row to expand and edit its name, description, project, directory, command, and per-machine settings.
-- **Reorder** — Use the up/down arrows on each row to change command order.
-- **Duplicate** — The copy button creates a clone of the row.
-- **Delete (two-step)** — Click the delete button once to arm it (it turns red and says "Confirm?"); click again within ~2.5 s to remove. The button auto-disarms otherwise.
-- **Auto-save** — Every change is persisted immediately to your `settings.json` in the same scope where `powerGlove.commands` currently lives (workspace folder → workspace → user).
-- **Machine view** — A "Only show commands for this machine" toggle dims commands that wouldn't appear on the detected host.
-- **Help** — A `?` button reveals an inline cheat-sheet at the bottom of the manager.
+- **Open Manager** - Run `Power Glove: Manage Commands` from the Command Palette, or click the gear button in the picker.
+- **Add / Edit** - Use `+ New command` to append a new entry. Click any row to expand and edit its name, description, project, directory, command, and per-machine settings.
+- **Reorder** - Use the up/down arrows on each row to change command order.
+- **Duplicate** - The copy button creates a clone of the row.
+- **Delete (two-step)** - Click the delete button once to arm it (it turns red and says "Confirm?"); click again within ~2.5 s to remove. The button auto-disarms otherwise.
+- **Auto-save** - Every change is persisted immediately to your `settings.json` in the same scope where `powerGlove.commands` currently lives (workspace folder → workspace → user).
+- **Machine view** - A "Only show commands for this machine" toggle dims commands that wouldn't appear on the detected host.
+- **Help** - A `?` button reveals an inline cheat-sheet at the bottom of the manager.
 
 ### Per-Machine Filtering and Overrides
 
 Each command lists the machines it should appear on, plus per-machine value overrides.
 
-- **Machine detection** — On startup the extension picks the current machine name from the remote SSH host (when running over Remote-SSH) or `os.hostname()` otherwise.
-- **Visibility** — A command is shown only if it has a `machineSettings` entry matching the detected machine and that entry doesn't have `show: false`.
-- **Overrides** — `<KEY>` tokens inside `command` or `directory` are substituted using the matching machine's `overrides` list. Tokens with no matching override are left untouched and a warning is logged to the **Power Glove** output channel.
+- **Machine detection** - On startup the extension picks the current machine name from the remote SSH host (when running over Remote-SSH) or `os.hostname()` otherwise.
+- **Visibility** - A command is shown only if it has a `machineSettings` entry matching the detected machine and that entry doesn't have `show: false`.
+- **Overrides** - `<KEY>` tokens inside `command` or `directory` are substituted using the matching machine's `overrides` list. Tokens with no matching override are left untouched and a warning is logged to the **Power Glove** output channel.
 
 ### Per-Project Filtering
 
@@ -191,7 +191,7 @@ Use `release_version.sh` script or manually:
 
 1. Update the `version` field in `package.json`
 2. Build the `.vsix` file: `npx @vscode/vsce package`
-3. Go to [Folder-Dock Releases](https://github.com/MattSzymonski/Folder-Dock/releases)
+3. Go to [Power-Glove Releases](https://github.com/MattSzymonski/Power-Glove/releases)
 4. Click **"Draft a new release"**
 5. Click **"Choose a tag"** and create a new tag matching the version (e.g. `v1.1.0`)
 6. Set the release title (e.g. `v1.1.0`)
