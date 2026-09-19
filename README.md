@@ -53,10 +53,17 @@ When `directory` is non-empty the command is automatically prefixed with the rig
 
 ## Installation
 
-1. Download the latest `.vsix` from the project releases.
-2. In VS Code, open the Command Palette (`Ctrl+Shift+P`).
-3. Choose **"Extensions: Install from VSIX..."**.
-4. Select the downloaded `.vsix` file.
+Every version tag is built by GitHub Actions and the `.vsix` is attached to the
+corresponding [GitHub release](https://github.com/MattSzymonski/Power-Glove/releases).
+
+- **Stable latest link** (always points at the newest release, version
+  independent):
+  `https://github.com/MattSzymonski/Power-Glove/releases/latest/download/power-glove.vsix`
+- **Versioned link**:
+  `https://github.com/MattSzymonski/Power-Glove/releases/download/v1.0.0/power-glove-1.0.0.vsix`
+
+In VS Code: open the Command Palette (`Ctrl+Shift+P`), choose
+**"Extensions: Install from VSIX..."**, and select the downloaded `.vsix`.
 
 ### code-server
 
@@ -68,8 +75,9 @@ is code-server's default extension registry.
 
 - Install from the registry:
   `code-server --install-extension MattSzymonski.power-glove`
-- Or download the `.vsix` from the GitHub releases and sideload it:
-  `code-server --install-extension power-glove-x.y.z.vsix`
+- Or download the `.vsix` straight from GitHub releases and sideload it:
+  `curl -L -o power-glove.vsix https://github.com/MattSzymonski/Power-Glove/releases/latest/download/power-glove.vsix`
+  `code-server --install-extension power-glove.vsix`
 
 Notes for code-server:
 

@@ -1,0 +1,110 @@
+# Builds the extension and attaches the .vsix to a GitHub release, so the
+# extension can be installed from a stable GitHub URL without any extension
+# registry (useful for code-server, air-gapped machines, or CI).
+#
+# Triggers:
+# - Push of a version tag (vX.Y.Z). The tag must equal the package.json
+#   version, so bump the version first (e.g. `npm version 1.0.1` + tag).
+# - Manual run (workflow_dispatch), optionally overriding the version via
+#   the `version` input.
+#
+# Every release gets two identical assets:
+# - power-glove-<version>.vsix  (versioned name)
+# - power-glove.vsix            (stable name, so the "latest" link below
+#   always works without knowing the current version)
+#
+# Stable install links:
+#   https://github.com/<owner>/<repo>/releases/latest/download/power-glove.vsix
+#   https://github.com/<owner>/<repo>/releases/download/v<version>/power-glove-<version>.vsix
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (leave empty to use package.json version)'
+        required: false
+        default: ''
+
+# Required for creating the release and uploading assets.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Keep the release tag, package.json version, and .vsix filename in
+      # sync. On tag pushes the tag must match package.json; manual runs
+      # may override the version via the workflow input.
+      - name: Resolve release version
+        id: resolve
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+            if [[ "$TAG_VERSION" != "$PACKAGE_VERSION" ]]; then
+              echo "::error::tag '$GITHUB_REF_NAME' does not match package.json version '$PACKAGE_VERSION'"
+              exit 1
+            fi
+            VERSION="$PACKAGE_VERSION"
+            TAG_NAME="$GITHUB_REF_NAME"
+          else
+            VERSION="${INPUT_VERSION:-$PACKAGE_VERSION}"
+            TAG_NAME="v${VERSION}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          if [[ "$VERSION" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Only needed for manual runs where the requested version differs
+      # from what is currently in package.json (the build reads it for the
+      # .vsix metadata). Tag runs always match by the check above.
+      - name: Apply version to package.json
+        if: github.ref_type != 'tag'
+        shell: bash
+        run: |
+          CURRENT="$(node -p "require('./package.json').version")"
+          if [[ "$CURRENT" != "${{ steps.resolve.outputs.version }}" ]]; then
+            npm version "${{ steps.resolve.outputs.version }}" --no-git-tag-version
+          fi
+
+      # `vsce package` runs the vscode:prepublish script first (type-check,
+      # lint, esbuild production bundle), then zips dist/ + media/.
+      - name: Package extension (.vsix)
+        run: |
+          npx @vscode/vsce package --out "power-glove-${{ steps.resolve.outputs.version }}.vsix"
+          cp "power-glove-${{ steps.resolve.outputs.version }}.vsix" power-glove.vsix
+
+      - name: Create GitHub release with .vsix assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.resolve.outputs.tag_name }}
+          generate_release_notes: true
+          prerelease: ${{ steps.resolve.outputs.prerelease }}
+          files: |
+            power-glove-${{ steps.resolve.outputs.version }}.vsix
+            power-glove.vsix
