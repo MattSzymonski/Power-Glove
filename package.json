@@ -30,6 +30,16 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "views": {
+      "explorer": [
+        {
+          "id": "powerGlove.commands",
+          "name": "Power Glove",
+          "icon": "media/power_glove_icon_128.png",
+          "contextualTitle": "Power Glove Commands"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "powerGlove.openUI",
@@ -37,7 +47,11 @@
       },
       {
         "command": "powerGlove.openManager",
-        "title": "Power Glove: Manage Commands"
+        "title": "Power Glove: Manage Commands (UI)"
+      },
+      {
+        "command": "powerGlove.openManagerJson",
+        "title": "Power Glove: Manage Commands (JSON)"
       },
       {
         "command": "powerGlove.runInCurrentTerminal",
@@ -46,100 +60,67 @@
       {
         "command": "powerGlove.runInNewTerminal",
         "title": "Power Glove: Run In New Terminal"
+      },
+      {
+        "command": "powerGlove.runRecent",
+        "title": "Power Glove: Run Recent Command"
+      },
+      {
+        "command": "powerGlove.tree.runCurrent",
+        "title": "Run in Current Terminal",
+        "icon": "$(play)"
+      },
+      {
+        "command": "powerGlove.tree.runNew",
+        "title": "Run in New Terminal",
+        "icon": "$(terminal-new)"
+      },
+      {
+        "command": "powerGlove.tree.showInfo",
+        "title": "Show Command Details",
+        "icon": "$(info)"
+      },
+      {
+        "command": "powerGlove.refreshTree",
+        "title": "Refresh Commands",
+        "icon": "$(refresh)"
       }
     ],
     "configuration": {
       "title": "Power Glove",
       "properties": {
-        "powerGlove.machines": {
-          "type": "array",
-          "default": [],
-          "description": "Known machines.",
-          "items": {
-            "type": "object",
-            "required": [
-              "name"
-            ],
-            "properties": {
-              "name": {
-                "type": "string"
-              }
-            }
-          }
-        },
-        "powerGlove.commands": {
-          "type": "array",
-          "default": [],
-          "description": "Commands to expose in the Power Glove popup.",
-          "items": {
-            "type": "object",
-            "required": [
-              "name",
-              "command"
-            ],
-            "properties": {
-              "name": {
-                "type": "string"
-              },
-              "description": {
-                "type": "string",
-                "default": "",
-                "description": "Optional human-readable description shown next to the command."
-              },
-              "project": {
-                "type": "string",
-                "default": "",
-                "description": "Substring that must be present in the opened workspace folder path. Empty = always show."
-              },
-              "directory": {
-                "type": "string",
-                "default": ""
-              },
-              "command": {
-                "type": "string"
-              },
-              "machineSettings": {
-                "type": "array",
-                "default": [],
-                "items": {
-                  "type": "object",
-                  "required": [
-                    "machineName"
-                  ],
-                  "properties": {
-                    "machineName": {
-                      "type": "string"
-                    },
-                    "show": {
-                      "type": "boolean",
-                      "default": true
-                    },
-                    "overrides": {
-                      "type": "array",
-                      "default": [],
-                      "items": {
-                        "type": "object",
-                        "required": [
-                          "key",
-                          "value"
-                        ],
-                        "properties": {
-                          "key": {
-                            "type": "string"
-                          },
-                          "value": {
-                            "type": "string"
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
+        "powerGlove.commandsFilePath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the JSON file where Power Glove commands are stored. Leave empty to use the default location inside VS Code's global storage."
         }
       }
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "powerGlove.refreshTree",
+          "when": "view == powerGlove.commands",
+          "group": "navigation@1"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "powerGlove.tree.runCurrent",
+          "when": "view == powerGlove.commands && viewItem == command",
+          "group": "inline@1"
+        },
+        {
+          "command": "powerGlove.tree.runNew",
+          "when": "view == powerGlove.commands && viewItem == command",
+          "group": "inline@2"
+        },
+        {
+          "command": "powerGlove.tree.showInfo",
+          "when": "view == powerGlove.commands && viewItem == command",
+          "group": "inline@3"
+        }
+      ]
     }
   },
   "scripts": {

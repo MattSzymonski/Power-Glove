@@ -21,14 +21,14 @@ Run any of your saved shell commands from a single Quick Pick popup.
 
 ### Commands Manager
 
-A webview that lets you edit `powerGlove.commands` without hand-editing JSON.
+A webview that lets you edit your Power Glove commands without hand-editing JSON.
 
 - **Open Manager** - Run `Power Glove: Manage Commands` from the Command Palette, or click the gear button in the picker.
 - **Add / Edit** - Use `+ New command` to append a new entry. Click any row to expand and edit its name, description, project, directory, command, and per-machine settings.
 - **Reorder** - Use the up/down arrows on each row to change command order.
 - **Duplicate** - The copy button creates a clone of the row.
 - **Delete (two-step)** - Click the delete button once to arm it (it turns red and says "Confirm?"); click again within ~2.5 s to remove. The button auto-disarms otherwise.
-- **Auto-save** - Every change is persisted immediately to your `settings.json` in the same scope where `powerGlove.commands` currently lives (workspace folder → workspace → user).
+- **Auto-save** - Every change is persisted immediately to your `power-glove-commands.json` file.
 - **Machine view** - A "Only show commands for this machine" toggle dims commands that wouldn't appear on the detected host.
 - **Help** - A `?` button reveals an inline cheat-sheet at the bottom of the manager.
 
@@ -60,34 +60,38 @@ When `directory` is non-empty the command is automatically prefixed with the rig
 
 ## Configuration
 
-You can edit commands through the **Commands Manager** webview, or directly in `settings.json`. Both write to the same `powerGlove.commands` array.
+Commands are stored in a dedicated JSON file (`power-glove-commands.json`) rather than in VS Code's `settings.json`. The file path is configurable via the `powerGlove.commandsFilePath` setting; when left empty it defaults to VS Code's global storage directory.
+
+You can edit commands through the **Commands Manager** webview, or directly edit the JSON file.
+
+### Setting reference
+
+| Setting                          | Description                                                        |
+| -------------------------------- | ------------------------------------------------------------------ |
+| `powerGlove.commandsFilePath`    | Path to the JSON file where commands are stored. Empty = default.  |
+
+### Commands file format
+
+The `power-glove-commands.json` file contains a JSON array of command objects:
 
 ### Minimal example
 
 ```json
-{
-  "powerGlove.commands": [
-    {
-      "name": "Run tests",
-      "command": "npm test",
-      "machineSettings": [
-        { "machineName": "my-laptop", "show": true }
-      ]
-    }
-  ]
-}
+[
+  {
+    "name": "Run tests",
+    "command": "npm test",
+    "machineSettings": [
+      { "machineName": "my-laptop", "show": true }
+    ]
+  }
+]
 ```
 
 ### Full example
 
 ```jsonc
-{
-  "powerGlove.machines": [
-    { "name": "my-laptop" },
-    { "name": "build-server" }
-  ],
-
-  "powerGlove.commands": [
+[
     {
       "name": "Build (release)",
       "description": "Compile the project in release mode",
@@ -120,15 +124,8 @@ You can edit commands through the **Commands Manager** webview, or directly in `
       ]
     }
   ]
-}
+]
 ```
-
-### Setting reference
-
-| Setting                 | Description                                                             |
-| ----------------------- | ----------------------------------------------------------------------- |
-| `powerGlove.machines[]` | Optional list of known machines. Currently informational, not enforced. |
-| `powerGlove.commands[]` | Commands shown in the popup and managed by the Commands Manager.        |
 
 ### Command schema
 
@@ -155,7 +152,8 @@ You can edit commands through the **Commands Manager** webview, or directly in `
 | Command                                | ID                                | Description                                       |
 | -------------------------------------- | --------------------------------- | ------------------------------------------------- |
 | `Power Glove: Open`                    | `powerGlove.openUI`               | Open the command picker Quick Pick.               |
-| `Power Glove: Manage Commands`         | `powerGlove.openManager`          | Open the Commands Manager webview.                |
+| `Power Glove: Manage Commands (UI)`    | `powerGlove.openManager`          | Open the Commands Manager webview.                |
+| `Power Glove: Manage Commands (JSON)`  | `powerGlove.openManagerJson`      | Open the commands JSON file in a new editor tab.  |
 | `Power Glove: Run In Current Terminal` | `powerGlove.runInCurrentTerminal` | Pick a command and run it in the active terminal. |
 | `Power Glove: Run In New Terminal`     | `powerGlove.runInNewTerminal`     | Pick a command and run it in a fresh terminal.    |
 
@@ -166,7 +164,9 @@ No keybindings are bundled by default; bind `powerGlove.openUI` (and any others 
 ```
 src/
   extension.ts        activation, command registration, output channel
-  config.ts           settings types + reader
+  config.ts           configuration reader, commands file path resolution
+  storage.ts          file I/O for power-glove-commands.json
+  types.ts            shared TypeScript interfaces
   machine.ts          current-machine detection
   resolver.ts         pure command resolution, filtering, overrides
   terminal.ts         VS Code terminal helpers

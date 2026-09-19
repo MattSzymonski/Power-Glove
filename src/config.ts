@@ -1,56 +1,72 @@
 // This file defines Power Glove's configuration schema and reader.
 // - Declares the TypeScript interfaces (CommandConfig, MachineSetting,
-//   Override, Machine, PowerGloveConfig) mirroring package.json schema.
-// - Exposes readConfig() which reads workspace/user settings under the
-//   `powerGlove` section via the vscode workspace API.
-// - Defensively sanitizes incoming arrays so consumers can rely on shape.
+//   Override) used throughout the extension.
+// - Exposes initializeCommandsStorage() which resolves the commands file
+//   path (from settings or the default globalStorage location) and stores
+//   it for subsequent read/write operations.
+// - Exposes readCommands() / saveCommands() that delegate to storage.ts
+//   using the resolved path, so consumers never need to track the path.
+// - Exposes getCommandsFilePath() for diagnostics and the manager UI.
 
 import * as vscode from 'vscode';
+import { CommandConfig } from './types';
+import {
+    getCommandsFilePath as resolvePath,
+    readCommandsFromFile,
+    writeCommandsToFile,
+    commandsFileExists,
+    createDefaultCommandsFile,
+} from './storage';
 
-export interface Override {
-    key: string;
-    value: string;
+// Re-export interfaces for backward compatibility with existing imports.
+export type { Override, MachineSetting, CommandConfig } from './types';
+
+// ── Module-level state ────────────────────────────────────────────────
+
+let resolvedFilePath = '';
+
+// ── Initialization ────────────────────────────────────────────────────
+
+/**
+ * Resolve the commands file path (configured or default) and store it.
+ * Must be called once during extension activation before any read/write.
+ * Returns the resolved path so callers can use it for existence checks.
+ */
+export function initializeCommandsStorage(context: vscode.ExtensionContext): string {
+    resolvedFilePath = resolvePath(context);
+    return resolvedFilePath;
 }
 
-export interface MachineSetting {
-    machineName: string;
-    show?: boolean;
-    overrides?: Override[];
+/** Return the currently resolved commands file path. */
+export function getCommandsFilePath(): string {
+    return resolvedFilePath;
 }
 
-export interface CommandConfig {
-    name: string;
-    description?: string;
-    project?: string;
-    directory?: string;
-    command: string;
-    machineSettings?: MachineSetting[];
+// ── Read / Write ──────────────────────────────────────────────────────
+
+/** Synchronously read commands from the resolved JSON file.
+ *  Returns an empty array when the file doesn't exist or is malformed. */
+export function readCommands(): CommandConfig[] {
+    if (!resolvedFilePath) { return []; }
+    return readCommandsFromFile(resolvedFilePath);
 }
 
-export interface Machine {
-    name: string;
+/** Asynchronously write commands to the resolved JSON file. */
+export async function saveCommands(commands: CommandConfig[]): Promise<void> {
+    if (!resolvedFilePath) { return; }
+    await writeCommandsToFile(resolvedFilePath, commands);
 }
 
-export interface PowerGloveConfig {
-    machines: Machine[];
-    commands: CommandConfig[];
+// ── File existence ────────────────────────────────────────────────────
+
+/** Check whether the resolved commands file exists on disk. */
+export function fileExists(): boolean {
+    if (!resolvedFilePath) { return false; }
+    return commandsFileExists(resolvedFilePath);
 }
 
-const SECTION = 'powerGlove';
-
-// Reads the `powerGlove` configuration section from VS Code settings
-// (workspace folder → workspace → user, per VS Code's normal precedence)
-// and returns it as a typed PowerGloveConfig with arrays guaranteed to exist.
-export function readConfig(): PowerGloveConfig {
-    const cfg = vscode.workspace.getConfiguration(SECTION);
-    return {
-        machines: sanitizeArray<Machine>(cfg.get('machines', [])),
-        commands: sanitizeArray<CommandConfig>(cfg.get('commands', [])),
-    };
-}
-
-// Defensive coercion: anything that isn't an array becomes an empty array,
-// so downstream code (resolver, manager UI) can iterate without null checks.
-function sanitizeArray<T>(value: unknown): T[] {
-    return Array.isArray(value) ? (value as T[]) : [];
+/** Create the commands file at the resolved path with an empty array. */
+export async function createFile(): Promise<void> {
+    if (!resolvedFilePath) { return; }
+    await createDefaultCommandsFile(resolvedFilePath);
 }

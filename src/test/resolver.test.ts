@@ -7,7 +7,7 @@
 //   host alongside the activation tests.
 
 import * as assert from 'assert';
-import { CommandConfig } from '../config';
+import { CommandConfig } from '../types';
 import { resolveCommands, ResolverOptions } from '../resolver';
 
 function opts(overrides: Partial<ResolverOptions> = {}): ResolverOptions {

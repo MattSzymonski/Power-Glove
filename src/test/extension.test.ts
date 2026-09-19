@@ -11,6 +11,7 @@ const EXT_ID = 'undefined_publisher.power-glove';
 const EXPECTED_COMMANDS = [
 	'powerGlove.openUI',
 	'powerGlove.openManager',
+	'powerGlove.openManagerJson',
 	'powerGlove.runInCurrentTerminal',
 	'powerGlove.runInNewTerminal',
 ];

@@ -1,0 +1,7 @@
+- In machine settings in commands manager add file names to above the fields
+- In "run in current terminal" and others list do not display "cd <path>...", display just the command
+- Remove "powerGlove.machines": setting completely, it is not needed
+- to the machine name in the machine settings add also hevron with machine names dropdown similarly to project field
+- Run recent command possibility
+- Directory picker 
+- Standardize directory format

@@ -1,153 +1,146 @@
 // This file implements the Power Glove Commands Manager webview.
 // - openCommandsManager() opens (or reveals) a single WebviewPanel that
-//   provides full CRUD over `powerGlove.commands`: add/edit/duplicate/
+//   provides full CRUD over Power Glove commands: add/edit/duplicate/
 //   delete/reorder, plus per-machine settings and <KEY> overrides.
-// - Persists changes back to settings.json under the same scope where
-//   the setting currently lives (WorkspaceFolder → Workspace → Global).
-// - Listens for external configuration changes and live-refreshes,
-//   while suppressing its own write-back echoes.
+// - Persists changes to the power-glove-commands.json file via config.ts.
+// - Listens for configuration changes (commands file path) and live-refreshes.
 // - The webview is plain HTML/CSS/JS with inline Lucide SVG icons.
 
 import * as vscode from 'vscode';
-import { CommandConfig } from '../config';
+import { CommandConfig } from '../types';
+import { readCommands, saveCommands, getCommandsFilePath } from '../config';
 import { detectMachineName } from '../machine';
 
 interface InboundMessage {
-    type: 'save';
-    commands: CommandConfig[];
+	type: 'save' | 'pickDirectory' | 'openJsonFile';
+	commands?: CommandConfig[];
+	requestId?: string;
 }
 
 interface OutboundMessage {
-    type: 'init';
-    machineName: string;
-    commands: CommandConfig[];
+	type: 'init' | 'directoryPicked';
+	machineName?: string;
+	commands?: CommandConfig[];
+	commandsFilePath?: string;
+	requestId?: string;
+	path?: string;
 }
 
 // Module-scoped singletons so a second invocation reveals the existing
 // panel rather than creating a duplicate one.
 let panel: vscode.WebviewPanel | undefined;
 let configWatcher: vscode.Disposable | undefined;
-// Set to true right before we write back to settings so the resulting
-// onDidChangeConfiguration event doesn't trigger a redundant re-render.
-let suppressNextConfigBroadcast = false;
 
 // Open or focus the Commands Manager webview.
 // - Singleton panel: a second call just reveals the existing one.
-// - Subscribes to settings changes so external edits to powerGlove.commands
-//   live-refresh the UI (skipping our own write-back echoes).
+// - Subscribes to settings changes so external edits to the commands file
+//   path live-refresh the UI.
 // - Sends the initial state to the webview once it's ready.
 export function openCommandsManager(context: vscode.ExtensionContext): void {
-    if (panel) {
-        panel.reveal(vscode.ViewColumn.Active);
-        return;
-    }
+	if (panel) {
+		panel.reveal(vscode.ViewColumn.Active);
+		return;
+	}
 
-    panel = vscode.window.createWebviewPanel(
-        'powerGlove.manager',
-        'Power Glove: Commands',
-        vscode.ViewColumn.Active,
-        { enableScripts: true, retainContextWhenHidden: true },
-    );
+	panel = vscode.window.createWebviewPanel(
+		'powerGlove.manager',
+		'Power Glove: Commands',
+		vscode.ViewColumn.Active,
+		{ enableScripts: true, retainContextWhenHidden: true },
+	);
 
-    panel.webview.html = renderHtml();
-    panel.webview.onDidReceiveMessage(handleMessage, undefined, context.subscriptions);
+	panel.webview.html = renderHtml();
+	panel.webview.onDidReceiveMessage(handleMessage, undefined, context.subscriptions);
 
-    // External changes to the commands setting should refresh the UI, except
-    // when we triggered the change ourselves (avoid render loops).
-    configWatcher = vscode.workspace.onDidChangeConfiguration((e) => {
-        if (!panel) { return; }
-        if (!e.affectsConfiguration('powerGlove.commands')) { return; }
-        if (suppressNextConfigBroadcast) {
-            suppressNextConfigBroadcast = false;
-            return;
-        }
-        broadcastInit();
-    });
-    context.subscriptions.push(configWatcher);
+	// When the user changes the commands file path in settings, reload.
+	configWatcher = vscode.workspace.onDidChangeConfiguration((e) => {
+		if (!panel) { return; }
+		if (!e.affectsConfiguration('powerGlove.commandsFilePath')) { return; }
+		broadcastInit();
+	});
+	context.subscriptions.push(configWatcher);
 
-    panel.onDidDispose(() => {
-        panel = undefined;
-        configWatcher?.dispose();
-        configWatcher = undefined;
-    });
+	panel.onDidDispose(() => {
+		panel = undefined;
+		configWatcher?.dispose();
+		configWatcher = undefined;
+	});
 
-    broadcastInit();
+	broadcastInit();
 }
 
-// Push the current command list + detected machine name to the webview.
-// Called once on open and again whenever settings change externally.
+// Push the current command list, detected machine name, and commands file
+// path to the webview. Called once on open and whenever the path changes.
 function broadcastInit(): void {
-    if (!panel) { return; }
-    const cfg = vscode.workspace.getConfiguration('powerGlove');
-    const commands = (cfg.get<CommandConfig[]>('commands', []) ?? []).map(normalize);
-    const msg: OutboundMessage = {
-        type: 'init',
-        machineName: detectMachineName(),
-        commands,
-    };
-    panel.webview.postMessage(msg);
+	if (!panel) { return; }
+	const commands = (readCommands() ?? []).map(normalize);
+	const msg: OutboundMessage = {
+		type: 'init',
+		machineName: detectMachineName(),
+		commands,
+		commandsFilePath: getCommandsFilePath(),
+	};
+	panel.webview.postMessage(msg);
 }
 
-// Receive messages from the webview. Currently only `save` is supported,
-// which writes the new commands array back to the appropriate settings scope.
-// Errors are surfaced as a notification rather than swallowed.
+// Receive messages from the webview. Handles `save`, `pickDirectory`,
+// and `openJsonFile` (delegates to the registered VS Code command).
 async function handleMessage(msg: InboundMessage): Promise<void> {
-    if (msg?.type !== 'save') { return; }
-    try {
-        const cfg = vscode.workspace.getConfiguration('powerGlove');
-        const inspect = cfg.inspect<CommandConfig[]>('commands');
-        const target = pickWriteTarget(inspect);
-        // We're about to trigger a config-change event; make sure broadcastInit
-        // doesn't echo back to the webview.
-        suppressNextConfigBroadcast = true;
-        await cfg.update('commands', msg.commands, target);
-    } catch (err) {
-        const text = err instanceof Error ? err.message : String(err);
-        vscode.window.showErrorMessage(`Power Glove: failed to save commands: ${text}`);
-    }
-}
-
-// Choose the settings scope to write into: prefer the most specific scope
-// where the value already exists (folder → workspace), defaulting to global
-// (user) settings when the value isn't set anywhere yet.
-function pickWriteTarget(
-    inspect: ReturnType<vscode.WorkspaceConfiguration['inspect']> | undefined,
-): vscode.ConfigurationTarget {
-    if (inspect?.workspaceFolderValue !== undefined) {
-        return vscode.ConfigurationTarget.WorkspaceFolder;
-    }
-    if (inspect?.workspaceValue !== undefined) {
-        return vscode.ConfigurationTarget.Workspace;
-    }
-    return vscode.ConfigurationTarget.Global;
+	if (msg?.type === 'openJsonFile') {
+		await vscode.commands.executeCommand('powerGlove.openManagerJson');
+		return;
+	}
+	if (msg?.type === 'pickDirectory') {
+		const uris = await vscode.window.showOpenDialog({
+			canSelectFiles: false,
+			canSelectFolders: true,
+			canSelectMany: false,
+			title: 'Select directory',
+		});
+		if (panel && uris && uris.length > 0) {
+			panel.webview.postMessage({
+				type: 'directoryPicked',
+				requestId: msg.requestId,
+				path: uris[0].fsPath,
+			} satisfies OutboundMessage);
+		}
+		return;
+	}
+	if (msg?.type !== 'save') { return; }
+	try {
+		await saveCommands(msg.commands ?? []);
+	} catch (err) {
+		const text = err instanceof Error ? err.message : String(err);
+		vscode.window.showErrorMessage(`Power Glove: failed to save commands: ${text}`);
+	}
 }
 
 // Coerce a CommandConfig into a fully-populated shape (no missing fields,
 // arrays guaranteed) so the webview can bind to it without null checks.
 function normalize(c: CommandConfig): CommandConfig {
-    return {
-        name: c?.name ?? '',
-        project: c?.project ?? '',
-        directory: c?.directory ?? '',
-        command: c?.command ?? '',
-        machineSettings: Array.isArray(c?.machineSettings)
-            ? c.machineSettings.map((m) => ({
-                machineName: m?.machineName ?? '',
-                show: m?.show !== false,
-                overrides: Array.isArray(m?.overrides)
-                    ? m.overrides.map((o) => ({ key: o?.key ?? '', value: o?.value ?? '' }))
-                    : [],
-            }))
-            : [],
-    };
+	return {
+		name: c?.name ?? '',
+		project: c?.project ?? '',
+		directory: c?.directory ?? '',
+		command: c?.command ?? '',
+		machineSettings: Array.isArray(c?.machineSettings)
+			? c.machineSettings.map((m) => ({
+				machineName: m?.machineName ?? '',
+				show: m?.show !== false,
+				overrides: Array.isArray(m?.overrides)
+					? m.overrides.map((o) => ({ key: o?.key ?? '', value: o?.value ?? '' }))
+					: [],
+			}))
+			: [],
+	};
 }
 
 // Build the static HTML/CSS/JS document that renders inside the webview.
 // The script section is self-contained: it talks to the host via
 // postMessage('save', ...) and listens for postMessage('init', ...).
 function renderHtml(): string {
-    // Plain HTML/CSS/JS, theme-aware via VS Code CSS variables.
-    return /* html */ `<!DOCTYPE html>
+	// Plain HTML/CSS/JS, theme-aware via VS Code CSS variables.
+	return /* html */ `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
@@ -277,6 +270,21 @@ function renderHtml(): string {
 	.field label {
 		font-size: 0.82em; opacity: 0.75; font-weight: 500;
 	}
+	.project-wrap { display: flex; gap: 4px; align-items: center; position: relative; }
+	.project-wrap > input { flex: 1; }
+	.project-dropdown {
+		position: absolute; top: calc(100% + 2px); left: 0; min-width: 100%;
+		background: var(--vscode-dropdown-background, var(--vscode-input-background));
+		border: 1px solid var(--vscode-focusBorder); border-radius: 2px;
+		box-shadow: 0 4px 12px rgba(0,0,0,0.25); z-index: 100;
+		max-height: 200px; overflow-y: auto; padding: 2px 0;
+	}
+	.project-dropdown .pd-item {
+		padding: 5px 10px; cursor: pointer;
+		font-family: var(--vscode-editor-font-family); white-space: nowrap;
+	}
+	.project-dropdown .pd-item:hover { background: var(--vscode-list-hoverBackground); }
+	.project-dropdown .pd-empty { padding: 6px 10px; opacity: 0.6; font-style: italic; }
 	input[type="text"], textarea {
 		font: inherit;
 		font-family: var(--vscode-editor-font-family);
@@ -298,6 +306,13 @@ function renderHtml(): string {
 		display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
 	}
 	.machine-block .head input { flex: 1; }
+	.overrides .ov-header {
+		display: grid; grid-template-columns: 1fr 2fr auto;
+		gap: 6px; margin-bottom: 2px;
+	}
+	.overrides .ov-header span {
+		font-size: 0.78em; opacity: 0.65; font-weight: 500;
+	}
 	.overrides .ov-row {
 		display: grid; grid-template-columns: 1fr 2fr auto;
 		gap: 6px; margin-bottom: 4px;
@@ -338,6 +353,7 @@ function renderHtml(): string {
 		</label>
 		<span style="flex:1"></span>
 		<button id="addBtn">+ New command</button>
+		<button id="jsonBtn" class="icon" title="Open json file"></button>
 		<button id="helpBtn" class="icon" title="Show instructions"></button>
 	</div>
 </header>
@@ -351,14 +367,16 @@ function renderHtml(): string {
 		<li>Click anywhere on a command bar to expand or collapse it.</li>
 		<li>Use <code>▲</code> / <code>▼</code> on the right to reorder.</li>
 		<li>The <code>✕</code> button requires two clicks to delete (resets after a couple of seconds).</li>
-		<li>Changes are saved automatically to your <code>settings.json</code> under <code>powerGlove.commands</code>.</li>
+		<li>Changes are saved automatically to your <code>power-glove-commands.json</code> file. Use <strong>Power Glove: Commands File Path</strong> in settings to change its location.</li>
 	</ul>
 	<h3>Fields</h3>
 	<ul>
-		<li><b>Project</b> — if non-empty, the command appears only when an open workspace folder path <i>contains</i> this substring. Empty = always shown.</li>
-		<li><b>Directory</b> — if non-empty, the command is prefixed with <code>cd /d "&lt;dir&gt;" &amp;&amp;</code> on Windows or <code>cd "&lt;dir&gt;" &amp;&amp;</code> elsewhere.</li>
-		<li><b>Command</b> — the shell command. May contain <code>&lt;KEY&gt;</code> placeholders that get replaced via per-machine overrides.</li>
-		<li><b>Machine settings</b> — the command is shown only on machines listed here with <i>Show</i> enabled. Per-machine <i>overrides</i> substitute <code>&lt;KEY&gt;</code> tokens in <i>Command</i> and <i>Directory</i>.</li>
+		<li><b>Name</b> — a short, human-readable label for the command (shown in the picker and tree view).</li>
+		<li><b>Description</b> — optional extra detail displayed alongside the command name in the picker.</li>
+		<li><b>Project filter</b> — restricts the command to workspaces whose folder path contains this text. Leave empty to make the command available in all projects.</li>
+		<li><b>Working directory</b> — when set, the shell first <code>cd</code>s into this folder before running the command. Uses <code>cd /d</code> on Windows, <code>cd</code> elsewhere.</li>
+		<li><b>Shell command</b> — the command passed to the shell. Use <code>&lt;KEY&gt;</code> placeholders that get replaced by per-machine overrides.</li>
+		<li><b>Machine settings</b> — control which machines see this command. Enable <i>Show</i> for each machine where it should appear. Per-machine <i>overrides</i> fill in <code>&lt;KEY&gt;</code> tokens in the command and working directory.</li>
 	</ul>
 	<h3>Tips</h3>
 	<ul>
@@ -383,10 +401,10 @@ function renderHtml(): string {
 		</div>
 		<div class="card-body">
 			<div class="field"><label>Name</label><input type="text" data-bind="name" /></div>
-			<div class="field"><label>Description (optional, shown in the picker)</label><input type="text" data-bind="description" /></div>
-			<div class="field"><label>Project (substring of workspace path; empty = always show)</label><input type="text" data-bind="project" /></div>
-			<div class="field"><label>Directory (empty = no cd)</label><input type="text" data-bind="directory" /></div>
-			<div class="field"><label>Command</label><textarea data-bind="command"></textarea></div>
+			<div class="field"><label>Description — optional help text shown in the command picker</label><input type="text" data-bind="description" /></div>
+			<div class="field"><label>Project filter — command only appears in workspaces whose folder path contains this text; leave empty to show everywhere</label><div class="project-wrap"><input type="text" data-bind="project" /><button class="icon project-drop-btn" title="Pick existing project" data-icon="down"></button></div></div>
+			<div class="field"><label>Working directory — the command runs from this folder; empty uses the terminal's current directory</label><div class="project-wrap"><input type="text" data-bind="directory" /><button class="icon dir-pick-btn" title="Browse for directory" data-icon="folder"></button></div></div>
+			<div class="field"><label>Shell command — the command to run. Use &lt;KEY&gt; placeholders for per-machine values</label><textarea data-bind="command"></textarea></div>
 			<div class="subhead">Machine settings</div>
 			<div class="machines"></div>
 			<button class="secondary" data-act="addMachine">+ Add machine setting</button>
@@ -396,10 +414,14 @@ function renderHtml(): string {
 
 <template id="machineTpl">
 	<div class="machine-block">
-		<div class="head">
-			<input type="text" data-bind="machineName" placeholder="machineName" />
-			<label class="toggle"><input type="checkbox" data-bind="show" /> Show</label>
-			<button class="icon danger" data-act="delMachine" title="Remove" data-icon="x"></button>
+		<div class="field" style="margin-bottom:6px">
+			<label>Machine name</label>
+			<div class="machine-name-wrap" style="display:flex;gap:6px;align-items:center;position:relative">
+				<input type="text" data-bind="machineName" placeholder="machineName" style="flex:1" />
+				<button class="icon machine-drop-btn" title="Pick existing machine name" data-icon="down"></button>
+				<label class="toggle"><input type="checkbox" data-bind="show" /> Show</label>
+				<button class="icon danger" data-act="delMachine" title="Remove" data-icon="x"></button>
+			</div>
 		</div>
 		<div class="overrides"></div>
 		<button class="secondary" data-act="addOverride">+ Add override</button>
@@ -433,7 +455,7 @@ function renderHtml(): string {
 		x:       \`<svg \${SVG_ATTRS}><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>\`,
 		help:    \`<svg \${SVG_ATTRS}><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>\`,
 		plus:    \`<svg \${SVG_ATTRS}><path d="M5 12h14"/><path d="M12 5v14"/></svg>\`,
-		glove:   '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 280 280" fill="currentColor" fill-rule="evenodd"><path d="M167.41 63.52s2.52-4.09 17.95-2.39c23.06 2.53 37.89 16.76 49.1 32.41 9.91 13.85 10.51 17.72 16.12 34.18 2.2 6.45 3.54 12.45 4.27 19.49-4.4-.51-5.5-.8-12.24-1.61-.86-12.4-8.76-41.09-33.32-62.93-16.08-14.31-34.94-10.94-34.94-10.94z"/><path d="M37.43 126.69l56.26 19.52s7.55-10.43 15.16-13.1c11.71-4.11 17.72.63 17.72.63l54.98-54.01s29.73 31.04 35.83 50.22c4.02 12.61 15.19 14.55 15.19 14.55l-60.78 50.53 68.05 63.67-16.41 17.43-70.6-78.79-59.61-5.1-64.16-51.61z"/><path d="M187.71 203.54c-3.55-3.27-3.77-8.78-.5-12.33 3.27-3.55 8.79-3.77 12.33-.5 3.55 3.28 3.77 8.79.5 12.34-3.27 3.54-8.78 3.77-12.33.49zM208.32 222.33c-3.55-3.27-3.77-8.78-.5-12.33 3.28-3.55 8.79-3.77 12.34-.5 3.54 3.27 3.77 8.79.49 12.33-3.27 3.55-8.78 3.77-12.33.5zM230.82 244.03c-3.55-3.27-3.77-8.79-.5-12.33 3.27-3.55 8.79-3.77 12.33-.5 3.55 3.27 3.77 8.78.5 12.33-3.27 3.55-8.78 3.77-12.33.5zM205.16 186.09c-3.54-3.27-3.77-8.79-.49-12.33 3.27-3.55 8.78-3.77 12.33-.5 3.55 3.27 3.77 8.78.5 12.33-3.28 3.55-8.79 3.77-12.34.5zM225.78 204.88c-3.55-3.28-3.77-8.79-.5-12.34 3.27-3.54 8.78-3.77 12.33-.49 3.55 3.27 3.77 8.78.5 12.33-3.27 3.55-8.79 3.77-12.33.5zM248.27 226.57c-3.54-3.27-3.77-8.78-.49-12.33 3.27-3.55 8.78-3.77 12.33-.5 3.55 3.28 3.77 8.79.5 12.34-3.28 3.54-8.79 3.77-12.34.49z"/><path d="M104.32 3L90.92 11.66l42.75 51.33-4.65 4.19-58.34-60.83-15.37 11.36 57.9 66.2-6.97 4.65-70.15-67.11-12.61 10.86 67.88 70.2-72.06-48.35-9.3 13.02 70.67 64.16 79.03-73.93-10.69-12.08-4.18 1.39"/></svg>',
+		folder:  \`<svg \${SVG_ATTRS}><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>\`,		file:    \`<svg \${SVG_ATTRS}><path d=\"M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z\"/><path d=\"M14 2v4a2 2 0 0 0 2 2h4\"/></svg>\`,		glove:   '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 280 280" fill="currentColor" fill-rule="evenodd"><path d="M167.41 63.52s2.52-4.09 17.95-2.39c23.06 2.53 37.89 16.76 49.1 32.41 9.91 13.85 10.51 17.72 16.12 34.18 2.2 6.45 3.54 12.45 4.27 19.49-4.4-.51-5.5-.8-12.24-1.61-.86-12.4-8.76-41.09-33.32-62.93-16.08-14.31-34.94-10.94-34.94-10.94z"/><path d="M37.43 126.69l56.26 19.52s7.55-10.43 15.16-13.1c11.71-4.11 17.72.63 17.72.63l54.98-54.01s29.73 31.04 35.83 50.22c4.02 12.61 15.19 14.55 15.19 14.55l-60.78 50.53 68.05 63.67-16.41 17.43-70.6-78.79-59.61-5.1-64.16-51.61z"/><path d="M187.71 203.54c-3.55-3.27-3.77-8.78-.5-12.33 3.27-3.55 8.79-3.77 12.33-.5 3.55 3.28 3.77 8.79.5 12.34-3.27 3.54-8.78 3.77-12.33.49zM208.32 222.33c-3.55-3.27-3.77-8.78-.5-12.33 3.28-3.55 8.79-3.77 12.34-.5 3.54 3.27 3.77 8.79.49 12.33-3.27 3.55-8.78 3.77-12.33.5zM230.82 244.03c-3.55-3.27-3.77-8.79-.5-12.33 3.27-3.55 8.79-3.77 12.33-.5 3.55 3.27 3.77 8.78.5 12.33-3.27 3.55-8.78 3.77-12.33.5zM205.16 186.09c-3.54-3.27-3.77-8.79-.49-12.33 3.27-3.55 8.78-3.77 12.33-.5 3.55 3.27 3.77 8.78.5 12.33-3.28 3.55-8.79 3.77-12.34.5zM225.78 204.88c-3.55-3.28-3.77-8.79-.5-12.34 3.27-3.54 8.78-3.77 12.33-.49 3.55 3.27 3.77 8.78.5 12.33-3.27 3.55-8.79 3.77-12.33.5zM248.27 226.57c-3.54-3.27-3.77-8.78-.49-12.33 3.27-3.55 8.78-3.77 12.33-.5 3.55 3.28 3.77 8.79.5 12.34-3.28 3.54-8.79 3.77-12.34.49z"/><path d="M104.32 3L90.92 11.66l42.75 51.33-4.65 4.19-58.34-60.83-15.37 11.36 57.9 66.2-6.97 4.65-70.15-67.11-12.61 10.86 67.88 70.2-72.06-48.35-9.3 13.02 70.67 64.16 79.03-73.93-10.69-12.08-4.18 1.39"/></svg>',
 	};
 
 	function setIcon(el, name) { if (el && ICONS[name]) { el.innerHTML = ICONS[name]; } }
@@ -446,9 +468,11 @@ function renderHtml(): string {
 	const machineEl = document.getElementById('machine');
 	const onlyMineEl = document.getElementById('onlyMine');
 	const addBtn = document.getElementById('addBtn');
+	const jsonBtn = document.getElementById('jsonBtn');
 	const helpBtn = document.getElementById('helpBtn');
 	const helpEl = document.getElementById('help');
 	const helpCloseBtn = document.getElementById('helpClose');
+	setIcon(jsonBtn, 'file');
 	setIcon(helpBtn, 'help');
 	setIcon(helpCloseBtn, 'x');
 	setIcon(document.getElementById('brand'), 'glove');
@@ -458,6 +482,7 @@ function renderHtml(): string {
 		if (opening) { helpEl.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
 	});
 	helpCloseBtn.addEventListener('click', () => helpEl.classList.remove('open'));
+	jsonBtn.addEventListener('click', () => vscode.postMessage({ type: 'openJsonFile' }));
 
 	const cardTpl = document.getElementById('cardTpl');
 	const machineTpl = document.getElementById('machineTpl');
@@ -465,12 +490,23 @@ function renderHtml(): string {
 
 	// Inbound from the extension host: 'init' carries the machine name and
 	// the current commands array; we replace local state and re-render.
+	// 'directoryPicked' carries a path selected via the native folder dialog.
+	// A Map tracks pending pick callbacks keyed by a unique requestId.
+	const dirPickCallbacks = new Map();
 	window.addEventListener('message', (e) => {
 		const m = e.data;
 		if (m?.type === 'init') {
 			state = { machineName: m.machineName || '', commands: m.commands || [] };
 			machineEl.textContent = state.machineName || '(unknown)';
+			// Show commands file path in a tooltip on the machine badge.
+			if (m.commandsFilePath) {
+				machineEl.title = 'Commands file: ' + m.commandsFilePath;
+			}
 			render();
+		}
+		if (m?.type === 'directoryPicked' && m.requestId && dirPickCallbacks.has(m.requestId)) {
+			dirPickCallbacks.get(m.requestId)(m.path);
+			dirPickCallbacks.delete(m.requestId);
 		}
 	});
 
@@ -484,13 +520,17 @@ function renderHtml(): string {
 			project: '',
 			directory: '',
 			command: '',
-			machineSettings: [{ machineName: state.machineName, show: true, overrides: [] }],
+			machineSettings: [],
 		});
 		save(); render(state.commands.length - 1);
 	});
 
 	// Persist the current commands array back to settings via the extension host.
 	function save() { vscode.postMessage({ type: 'save', commands: state.commands }); }
+	// Debounced save for text input events: coalesces rapid keystrokes into a
+	// single write so in-flight saves don't race against the suppress counter.
+	let saveTimer = 0;
+	function debouncedSave() { clearTimeout(saveTimer); saveTimer = setTimeout(save, 400); }
 
 	// True when this command has at least one machineSetting matching the
 	// detected host with show !== false. Used for the dim/'only mine' filter.
@@ -587,15 +627,85 @@ function renderHtml(): string {
 				c[prop] = el.value;
 				if (prop === 'name') { node.querySelector('.name').textContent = el.value || '(unnamed)'; }
 				if (prop === 'command') { node.querySelector('.preview').textContent = el.value; }
-				save();
-				if (prop === 'project') { render(idx); }
+				debouncedSave();
 			});
+			if (prop === 'project') {
+				el.addEventListener('blur', () => { render(idx); });
+			}
 		};
 		bind('name');
 		bind('description');
 		bind('project');
 		bind('directory');
 		bind('command');
+
+		// Project value dropdown: lists all distinct project values in state.
+		const projectInput = node.querySelector('[data-bind="project"]');
+		const projectWrap = node.querySelector('.project-wrap');
+		const projectDropBtn = node.querySelector('.project-drop-btn');
+		setIcon(projectDropBtn, 'down');
+
+		projectDropBtn.addEventListener('click', (ev) => {
+			ev.stopPropagation();
+			// Close any other open dropdowns first.
+			document.querySelectorAll('.project-dropdown').forEach((el) => el.remove());
+
+			const projects = [...new Set(
+				state.commands.map((cmd) => (cmd.project || '').trim()).filter(Boolean)
+			)].sort();
+
+			const dropdown = document.createElement('div');
+			dropdown.className = 'project-dropdown';
+
+			if (projects.length === 0) {
+				const empty = document.createElement('div');
+				empty.className = 'pd-empty';
+				empty.textContent = 'No projects defined yet';
+				dropdown.appendChild(empty);
+			} else {
+				for (const p of projects) {
+					const item = document.createElement('div');
+					item.className = 'pd-item';
+					item.textContent = p;
+					item.addEventListener('mousedown', (e) => {
+						e.preventDefault(); // keep focus on input
+						c.project = p;
+						projectInput.value = p;
+						save();
+						dropdown.remove();
+						render(idx);
+					});
+					dropdown.appendChild(item);
+				}
+			}
+
+			projectWrap.appendChild(dropdown);
+
+			// Close when clicking outside the wrapper.
+			const close = (e) => {
+				if (!projectWrap.contains(e.target)) {
+					dropdown.remove();
+					document.removeEventListener('mousedown', close);
+				}
+			};
+			setTimeout(() => document.addEventListener('mousedown', close), 0);
+		});
+
+		// Directory browse button: opens native folder picker via extension host.
+		const dirInput = node.querySelector('[data-bind="directory"]');
+		const dirPickBtn = node.querySelector('.dir-pick-btn');
+		setIcon(dirPickBtn, 'folder');
+		dirPickBtn.addEventListener('click', (ev) => {
+			ev.stopPropagation();
+			const requestId = Math.random().toString(36).slice(2);
+			dirPickCallbacks.set(requestId, (path) => {
+				if (!path) { return; }
+				c.directory = path;
+				dirInput.value = path;
+				save();
+			});
+			vscode.postMessage({ type: 'pickDirectory', requestId });
+		});
 
 		// Render any existing per-machine setting blocks under this card.
 		const machinesEl = node.querySelector('.machines');
@@ -672,10 +782,60 @@ function renderHtml(): string {
 		const showEl = node.querySelector('[data-bind="show"]');
 		nameEl.value = m.machineName || '';
 		showEl.checked = m.show !== false;
-		nameEl.addEventListener('input', () => { m.machineName = nameEl.value; save(); });
+		nameEl.addEventListener('input', () => { m.machineName = nameEl.value; debouncedSave(); });
 		showEl.addEventListener('change', () => { m.show = showEl.checked; save(); });
 
+		// Machine name dropdown: lists all distinct machineName values across all commands.
+		const machineWrap = node.querySelector('.machine-name-wrap');
+		const machineDropBtn = node.querySelector('.machine-drop-btn');
+		setIcon(machineDropBtn, 'down');
+		machineDropBtn.addEventListener('click', (ev) => {
+			ev.stopPropagation();
+			document.querySelectorAll('.project-dropdown').forEach((el) => el.remove());
+			const names = [...new Set(
+				state.commands.flatMap((c) =>
+					(c.machineSettings || []).map((s) => (s.machineName || '').trim()).filter(Boolean)
+				)
+			)].sort();
+			const dropdown = document.createElement('div');
+			dropdown.className = 'project-dropdown';
+			if (names.length === 0) {
+				const empty = document.createElement('div');
+				empty.className = 'pd-empty';
+				empty.textContent = 'No machine names defined yet';
+				dropdown.appendChild(empty);
+			} else {
+				for (const n of names) {
+					const item = document.createElement('div');
+					item.className = 'pd-item';
+					item.textContent = n;
+					item.addEventListener('mousedown', (e) => {
+						e.preventDefault();
+						m.machineName = n;
+						nameEl.value = n;
+						save();
+						dropdown.remove();
+					});
+					dropdown.appendChild(item);
+				}
+			}
+			machineWrap.appendChild(dropdown);
+			const close = (e) => {
+				if (!machineWrap.contains(e.target)) {
+					dropdown.remove();
+					document.removeEventListener('mousedown', close);
+				}
+			};
+			setTimeout(() => document.addEventListener('mousedown', close), 0);
+		});
+
 		const ovsEl = node.querySelector('.overrides');
+		if ((m.overrides || []).length > 0) {
+			const header = document.createElement('div');
+			header.className = 'ov-header';
+			header.innerHTML = '<span>Key</span><span>Value</span><span></span>';
+			ovsEl.appendChild(header);
+		}
 		(m.overrides || []).forEach((o, oi) => ovsEl.appendChild(buildOverride(m, o, oi)));
 
 		node.querySelector('[data-act="delMachine"]').addEventListener('click', () => {
@@ -699,8 +859,8 @@ function renderHtml(): string {
 		const v = node.querySelector('[data-bind="value"]');
 		k.value = o.key || '';
 		v.value = o.value || '';
-		k.addEventListener('input', () => { o.key = k.value; save(); });
-		v.addEventListener('input', () => { o.value = v.value; save(); });
+		k.addEventListener('input', () => { o.key = k.value; debouncedSave(); });
+		v.addEventListener('input', () => { o.value = v.value; debouncedSave(); });
 		node.querySelector('[data-act="delOverride"]').addEventListener('click', () => {
 			m.overrides.splice(oi, 1);
 			save();

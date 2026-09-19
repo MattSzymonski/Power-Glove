@@ -8,7 +8,7 @@
 // - Builds the final shell string with a platform-correct cd prefix.
 // - Has no `vscode` dependency, which makes it directly unit-testable.
 
-import { CommandConfig, MachineSetting, Override } from './config';
+import { CommandConfig, MachineSetting, Override } from './types';
 
 export interface ResolvedCommand {
     name: string;
