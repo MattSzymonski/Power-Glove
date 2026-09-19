@@ -8,8 +8,10 @@
 # its terms restrict the marketplace to official VS Code builds, and
 # code-server resolves extensions from Open VSX anyway.
 #
-# Required repository secret:
+# Optional repository secret:
 #   OPEN_VSX_TOKEN - a Personal Access Token from https://open-vsx.org/user-settings/tokens
+# The publish step is skipped (with a warning) when the secret is missing,
+# so tag pushes still succeed while the registry part is not configured.
 
 name: Publish to Open VSX
 
@@ -29,7 +31,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Install dependencies
@@ -41,7 +43,17 @@ jobs:
       - name: Package extension (.vsix)
         run: npx @vscode/vsce package --out power-glove.vsix
 
+      # Skip the publish when the OPEN_VSX_TOKEN secret has not been added
+      # to the repository yet, so the run does not fail on tag pushes.
+      - name: Notice about missing Open VSX token
+        if: ${{ secrets.OPEN_VSX_TOKEN == '' }}
+        run: |
+          echo "::warning::OPEN_VSX_TOKEN secret is not set; skipping the Open VSX publish."
+          echo "Add the secret in repository Settings > Secrets and variables > Actions,"
+          echo "then re-run this workflow to publish."
+
       - name: Publish to Open VSX
+        if: ${{ secrets.OPEN_VSX_TOKEN != '' }}
         uses: HaaLeo/publish-vscode-extension@v1
         with:
           pat: ${{ secrets.OPEN_VSX_TOKEN }}
