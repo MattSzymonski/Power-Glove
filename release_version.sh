@@ -7,8 +7,8 @@
 #                            version bump uncommitted.
 #              Actions mode : bumps the version, commits the bump, creates
 #                            a version tag, and pushes both to origin. The
-#                            GitHub workflows then build the .vsix, create
-#                            the GitHub release, and publish to Open VSX.
+#                            release workflow then builds the .vsix and
+#                            attaches it to the GitHub release.
 # USAGE: ./release_version.sh <version>
 #
 # EXAMPLE USAGE:
@@ -55,8 +55,8 @@ echo "How do you want to ship it?"
 echo "  1) Local build      bump the version and build the .vsix files here;"
 echo "                      nothing is committed or pushed"
 echo "  2) GitHub Actions   bump the version, commit it, tag v$REQUESTED_VERSION,"
-echo "                      and push; CI builds the .vsix, creates the GitHub"
-echo "                      release, and publishes to Open VSX"
+echo "                      and push; CI builds the .vsix and attaches it to"
+echo "                      the GitHub release"
 echo "  3) Cancel"
 RELEASE_MODE=""
 while [ -z "$RELEASE_MODE" ]; do
@@ -140,9 +140,8 @@ git push
 git push origin "$TAG_NAME"
 
 echo ""
-echo "Tag $TAG_NAME pushed. GitHub Actions is now:"
-echo "  1. Building the .vsix and attaching it to the GitHub release (release.yml)"
-echo "  2. Publishing to Open VSX (publish-openvsx.yml)"
+echo "Tag $TAG_NAME pushed. GitHub Actions is now building the .vsix and"
+echo "attaching it to the GitHub release (release.yml)."
 echo ""
 echo "Track progress at:   $REPO_URL/actions"
 echo "Release will appear: $REPO_URL/releases/tag/$TAG_NAME"

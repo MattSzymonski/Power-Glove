@@ -1,8 +1,11 @@
-# Publishes Power Glove to Open VSX whenever a version tag (vX.Y.Z) is
-# pushed. Open VSX is the default extension registry for code-server and
-# other web-based VS Code builds, so publishing here is what makes the
-# extension installable in code-server via `--install-extension <id>` or
-# by .vsix download.
+# Optional Open VSX publishing. Kept out of the automatic release path for
+# now: tag pushes only build the .vsix and attach it to a GitHub release
+# (release.yml). This workflow runs manually, so the registry publish is
+# fully optional and never fails a release.
+#
+# Open VSX is the default extension registry for code-server and other
+# web-based VS Code builds. Publishing there makes the extension
+# installable via `code-server --install-extension MattSzymonski.power-glove`.
 #
 # The Microsoft Marketplace is intentionally not published to from here:
 # its terms restrict the marketplace to official VS Code builds, and
@@ -10,15 +13,11 @@
 #
 # Optional repository secret:
 #   OPEN_VSX_TOKEN - a Personal Access Token from https://open-vsx.org/user-settings/tokens
-# The publish step is skipped (with a warning) when the secret is missing,
-# so tag pushes still succeed while the registry part is not configured.
+# The publish step is skipped (with a warning) when the secret is missing.
 
 name: Publish to Open VSX
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
 
 jobs:
@@ -43,17 +42,30 @@ jobs:
       - name: Package extension (.vsix)
         run: npx @vscode/vsce package --out power-glove.vsix
 
-      # Skip the publish when the OPEN_VSX_TOKEN secret has not been added
-      # to the repository yet, so the run does not fail on tag pushes.
+      # GitHub Actions does not allow the secrets context inside `if`
+      # conditions, so probe the token in a shell step first and gate the
+      # publish steps on that step's output instead.
+      - name: Check for Open VSX token
+        id: check_token
+        shell: bash
+        env:
+          OPEN_VSX_TOKEN: ${{ secrets.OPEN_VSX_TOKEN }}
+        run: |
+          if [[ -n "$OPEN_VSX_TOKEN" ]]; then
+            echo "has_token=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Notice about missing Open VSX token
-        if: ${{ secrets.OPEN_VSX_TOKEN == '' }}
+        if: steps.check_token.outputs.has_token == 'false'
         run: |
           echo "::warning::OPEN_VSX_TOKEN secret is not set; skipping the Open VSX publish."
           echo "Add the secret in repository Settings > Secrets and variables > Actions,"
           echo "then re-run this workflow to publish."
 
       - name: Publish to Open VSX
-        if: ${{ secrets.OPEN_VSX_TOKEN != '' }}
+        if: steps.check_token.outputs.has_token == 'true'
         uses: HaaLeo/publish-vscode-extension@v1
         with:
           pat: ${{ secrets.OPEN_VSX_TOKEN }}

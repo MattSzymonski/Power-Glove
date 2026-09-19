@@ -70,14 +70,13 @@ In VS Code: open the Command Palette (`Ctrl+Shift+P`), choose
 Power Glove works in [code-server](https://github.com/coder/code-server): it only
 uses core VS Code APIs (terminals, tree views, webviews, QuickPicks, storage),
 which code-server fully supports, and running commands in server-side terminals
-is exactly code-server's model. The extension is published to Open VSX, which
-is code-server's default extension registry.
+is exactly code-server's model.
 
-- Install from the registry:
-  `code-server --install-extension MattSzymonski.power-glove`
-- Or download the `.vsix` straight from GitHub releases and sideload it:
+- Download the `.vsix` straight from GitHub releases and sideload it:
   `curl -L -o power-glove.vsix https://github.com/MattSzymonski/Power-Glove/releases/latest/download/power-glove.vsix`
   `code-server --install-extension power-glove.vsix`
+- Registry install from Open VSX is optional and not published automatically;
+  see the `publish-openvsx.yml` workflow if you want to enable it later.
 
 Notes for code-server:
 
