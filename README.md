@@ -58,6 +58,28 @@ When `directory` is non-empty the command is automatically prefixed with the rig
 3. Choose **"Extensions: Install from VSIX..."**.
 4. Select the downloaded `.vsix` file.
 
+### code-server
+
+Power Glove works in [code-server](https://github.com/coder/code-server): it only
+uses core VS Code APIs (terminals, tree views, webviews, QuickPicks, storage),
+which code-server fully supports, and running commands in server-side terminals
+is exactly code-server's model. The extension is published to Open VSX, which
+is code-server's default extension registry.
+
+- Install from the registry:
+  `code-server --install-extension MattSzymonski.power-glove`
+- Or download the `.vsix` from the GitHub releases and sideload it:
+  `code-server --install-extension power-glove-x.y.z.vsix`
+
+Notes for code-server:
+
+- **Engine floor** - `engines.vscode` is `^1.90.0`, so the extension installs
+  on code-server builds back to the VS Code 1.90 engine, not just the newest one.
+- **Machine detection** - code-server does not set a remote name, so Power
+  Glove falls back to `os.hostname()`, i.e. the container's hostname. Give the
+  container a stable `hostname:` (docker-compose) or match `machineSettings`
+  against the generated container hostname.
+
 ## Configuration
 
 Commands are stored in a dedicated JSON file (`power-glove-commands.json`) rather than in VS Code's `settings.json`. The file path is configurable via the `powerGlove.commandsFilePath` setting; when left empty it defaults to VS Code's global storage directory.

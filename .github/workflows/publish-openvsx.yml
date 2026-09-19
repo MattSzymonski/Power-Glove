@@ -1,0 +1,50 @@
+# Publishes Power Glove to Open VSX whenever a version tag (vX.Y.Z) is
+# pushed. Open VSX is the default extension registry for code-server and
+# other web-based VS Code builds, so publishing here is what makes the
+# extension installable in code-server via `--install-extension <id>` or
+# by .vsix download.
+#
+# The Microsoft Marketplace is intentionally not published to from here:
+# its terms restrict the marketplace to official VS Code builds, and
+# code-server resolves extensions from Open VSX anyway.
+#
+# Required repository secret:
+#   OPEN_VSX_TOKEN - a Personal Access Token from https://open-vsx.org/user-settings/tokens
+
+name: Publish to Open VSX
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `vsce package` runs the vscode:prepublish script (type-check, lint,
+      # esbuild production bundle) and writes a deterministic file name so
+      # the publish step below does not need a glob.
+      - name: Package extension (.vsix)
+        run: npx @vscode/vsce package --out power-glove.vsix
+
+      - name: Publish to Open VSX
+        uses: HaaLeo/publish-vscode-extension@v1
+        with:
+          pat: ${{ secrets.OPEN_VSX_TOKEN }}
+          registryUrl: https://open-vsx.org
+          extensionFile: power-glove.vsix
+          skipDuplicate: true
