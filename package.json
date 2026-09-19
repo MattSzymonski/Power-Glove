@@ -3,7 +3,7 @@
   "displayName": "Power Glove",
   "author": "Mateusz Matt Szymonski <mattszymonski@gmail.com>",
   "description": "Compact command-runner with per-machine overrides.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "MattSzymonski",
   "repository": {
     "type": "git",
