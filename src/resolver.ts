@@ -17,6 +17,10 @@ export interface ResolvedCommand {
     directory: string;
     command: string;
     finalShellCommand: string;
+    /** Set when this entry runs a VS Code command instead of a shell command. */
+    vscodeCommand?: string;
+    /** Arguments passed to `vscodeCommand`, in order. */
+    vscodeCommandArgs?: unknown[];
 }
 
 export interface ResolverOptions {
@@ -30,9 +34,10 @@ export interface ResolverOptions {
 // ResolvedCommand entries. For each input command:
 //  - Drop entries that fail basic shape validation.
 //  - Drop entries that have no machineSettings match for the current host, or
-//    whose matching entry has show:false.
+//    whose matching entry has show:false; each drop is logged.
 //  - Drop entries whose `project` substring isn't found in any open workspace
-//    folder path (empty `project` means "always show").
+//    folder path (empty `project` means "always show"); each drop is logged.
+//  - Log how many entries survived, so an empty result is traceable.
 //  - Substitute <KEY> placeholders in `command` and `directory` using the
 //    matched machine's `overrides`, logging any unresolved placeholders.
 //  - Build the final shell string with a platform-correct `cd` prefix.
@@ -53,18 +58,43 @@ export function resolveCommands(
         // Machine visibility gate: must be listed for this host and not hidden.
         const setting = findMachineSetting(cmd.machineSettings, opts.machineName);
         if (!setting || setting.show === false) {
+            opts.logger?.(`Skipping ${cmd.name}: not enabled for machine "${opts.machineName}"`);
             continue;
         }
 
         // Project filter: when set, at least one open folder path must contain it.
         const project = (cmd.project ?? '').trim();
         if (project && !opts.workspacePaths.some((p) => p.includes(project))) {
+            opts.logger?.(`Skipping ${cmd.name}: project "${project}" matches no open workspace folder`);
             continue;
         }
 
         // Apply this machine's overrides to both the command and the cd directory.
         const overrides = setting.overrides ?? [];
-        const command = applyOverrides(cmd.command, overrides, cmd.name, opts.logger);
+
+        // A VS Code-command entry never reaches a terminal, so it has neither a
+        // cd prefix nor a shell line. Overrides still apply, to its string
+        // arguments only, so a per-machine value (an address, a path) is
+        // substituted exactly as it is inside a shell command.
+        const vscodeCommand = (cmd.vscodeCommand ?? '').trim();
+        if (vscodeCommand) {
+            const args = (cmd.vscodeCommandArgs ?? []).map((arg) =>
+                substituteOverrides(arg, overrides, cmd.name, opts.logger),
+            );
+            out.push({
+                name: cmd.name,
+                description: (cmd.description ?? '').trim(),
+                project,
+                directory: '',
+                command: '',
+                finalShellCommand: describeVscodeCommand(vscodeCommand, args),
+                vscodeCommand,
+                vscodeCommandArgs: args,
+            });
+            continue;
+        }
+
+        const command = applyOverrides(cmd.command ?? '', overrides, cmd.name, opts.logger);
         const directory = applyOverrides(cmd.directory ?? '', overrides, cmd.name, opts.logger);
 
         out.push({
@@ -77,12 +107,21 @@ export function resolveCommands(
         });
     }
 
+    // Report the outcome, so a partial or empty list is self-explanatory in the
+    // Power Glove output channel instead of looking like an unreadable file.
+    opts.logger?.(`loaded ${out.length} of ${commands.length} commands for machine "${opts.machineName}"`);
+
     return out;
 }
 
-// Minimal shape check used to filter out garbage from user settings.
+// Minimal shape check used to filter out garbage from user settings. An entry
+// needs a name and something to do: either a shell command or a VS Code
+// command id.
 function isValid(cmd: CommandConfig): boolean {
-    return !!cmd && typeof cmd.name === 'string' && typeof cmd.command === 'string';
+    if (!cmd || typeof cmd.name !== 'string') { return false; }
+    const hasShellCommand = typeof cmd.command === 'string';
+    const hasVscodeCommand = typeof cmd.vscodeCommand === 'string' && cmd.vscodeCommand.trim().length > 0;
+    return hasShellCommand || hasVscodeCommand;
 }
 
 // Look up the MachineSetting whose machineName matches the current host.
@@ -128,6 +167,34 @@ function applyOverrides(
     return out;
 }
 
+// Apply overrides to an argument of any shape: a bare string is substituted
+// directly, and strings nested inside plain arrays/objects are substituted in
+// place. Structured arguments are the normal case for a VS Code command — the
+// VNC connect command takes { label: "host:port" } — so without this a
+// per-machine address could not be expressed at all.
+// Arguments originate in JSON, so only plain values are encountered here.
+function substituteOverrides(
+    value: unknown,
+    overrides: Override[],
+    cmdName: string,
+    logger?: (msg: string) => void,
+): unknown {
+    if (typeof value === 'string') {
+        return applyOverrides(value, overrides, cmdName, logger);
+    }
+    if (Array.isArray(value)) {
+        return value.map((item) => substituteOverrides(item, overrides, cmdName, logger));
+    }
+    if (value !== null && typeof value === 'object') {
+        const out: Record<string, unknown> = {};
+        for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+            out[key] = substituteOverrides(item, overrides, cmdName, logger);
+        }
+        return out;
+    }
+    return value;
+}
+
 // Compose the final shell line: when a directory is set, prefix with the
 // platform-correct `cd` so the command runs in that folder. With no directory
 // the command is returned unchanged.
@@ -136,4 +203,14 @@ function buildShellCommand(command: string, directory: string, isWindows: boolea
     if (!dir) { return command; }
     const cd = isWindows ? `cd /d "${dir}"` : `cd "${dir}"`;
     return `${cd} && ${command}`;
+}
+
+// Human-readable summary of a VS Code-command entry, shown wherever a shell
+// line would otherwise appear (the picker row and the details popup). There is
+// no shell equivalent to display, so the command id and its arguments stand in
+// for it.
+function describeVscodeCommand(commandId: string, args: unknown[]): string {
+    const rendered = args.map((arg) => (typeof arg === 'string' ? arg : JSON.stringify(arg)));
+    const suffix = rendered.length > 0 ? ` ${rendered.join(' ')}` : '';
+    return `VS Code command: ${commandId}${suffix}`;
 }

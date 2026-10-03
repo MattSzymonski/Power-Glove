@@ -117,22 +117,30 @@ async function handleMessage(msg: InboundMessage): Promise<void> {
 
 // Coerce a CommandConfig into a fully-populated shape (no missing fields,
 // arrays guaranteed) so the webview can bind to it without null checks.
+//
+// Fields the manager's form does not edit are carried through verbatim. The
+// webview round-trips whatever it is handed on save, so anything omitted here
+// is silently deleted from the commands file the next time the user saves from
+// the UI. Only populated optional fields are emitted, which keeps the stored
+// JSON free of empty placeholders.
 function normalize(c: CommandConfig): CommandConfig {
-	return {
-		name: c?.name ?? '',
-		project: c?.project ?? '',
-		directory: c?.directory ?? '',
-		command: c?.command ?? '',
-		machineSettings: Array.isArray(c?.machineSettings)
-			? c.machineSettings.map((m) => ({
-				machineName: m?.machineName ?? '',
-				show: m?.show !== false,
-				overrides: Array.isArray(m?.overrides)
-					? m.overrides.map((o) => ({ key: o?.key ?? '', value: o?.value ?? '' }))
-					: [],
-			}))
-			: [],
-	};
+	const normalized: CommandConfig = { name: c?.name ?? '' };
+	if (c?.description) { normalized.description = c.description; }
+	normalized.project = c?.project ?? '';
+	normalized.directory = c?.directory ?? '';
+	normalized.command = c?.command ?? '';
+	if (c?.vscodeCommand) { normalized.vscodeCommand = c.vscodeCommand; }
+	if (c?.vscodeCommandArgs?.length) { normalized.vscodeCommandArgs = c.vscodeCommandArgs; }
+	normalized.machineSettings = Array.isArray(c?.machineSettings)
+		? c.machineSettings.map((m) => ({
+			machineName: m?.machineName ?? '',
+			show: m?.show !== false,
+			overrides: Array.isArray(m?.overrides)
+				? m.overrides.map((o) => ({ key: o?.key ?? '', value: o?.value ?? '' }))
+				: [],
+		}))
+		: [];
+	return normalized;
 }
 
 // Build the static HTML/CSS/JS document that renders inside the webview.

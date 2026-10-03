@@ -77,6 +77,9 @@ export function activate(context: vscode.ExtensionContext): void {
 	// Refresh the tree whenever the commands-file-path configuration
 	// changes or workspace folders are added/removed.
 	const refreshTree = () => {
+		// Name the file in use, so "which commands file is this reading?" is
+		// answerable from the output channel rather than by reading the code.
+		log(`commands file: ${getCommandsFilePath()}`);
 		const { resolved, machineName } = getResolvedCommands();
 		treeProvider.refresh(resolved);
 		treeView.description = machineName;

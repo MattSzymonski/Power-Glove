@@ -17,6 +17,11 @@ export interface CommandConfig {
     description?: string;
     project?: string;
     directory?: string;
-    command: string;
+    /** Shell command typed into a terminal. Absent when `vscodeCommand` is set. */
+    command?: string;
+    /** VS Code command id to execute instead of a shell command. */
+    vscodeCommand?: string;
+    /** Arguments forwarded to `vscodeCommand`, in order. */
+    vscodeCommandArgs?: unknown[];
     machineSettings?: MachineSetting[];
 }
