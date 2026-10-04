@@ -8,11 +8,22 @@
 // - Builds the final shell string with a platform-correct cd prefix.
 // - Has no `vscode` dependency, which makes it directly unit-testable.
 
-import { CommandConfig, MachineSetting, Override } from './types';
+import { CommandConfig, CommandType, MachineSetting, Override } from './types';
 
 export interface ResolvedCommand {
     name: string;
     description: string;
+    /** Validated hex color ("#rgb" or "#rrggbb") for the tree row chip;
+     *  undefined when the entry has no (valid) color. */
+    color?: string;
+    /** Trigger mode; 'auto' commands are run by the background engine. */
+    type: CommandType;
+    /** Lower bound of the background run interval; only set for 'auto'.
+     *  Equals autoRunIntervalMaxMinutes when the interval is fixed. */
+    autoRunIntervalMinutes?: number;
+    /** Upper bound of the background run interval. A value above the minimum
+     *  means the next run is scheduled after a random delay in the range. */
+    autoRunIntervalMaxMinutes?: number;
     project: string;
     directory: string;
     command: string;
@@ -72,6 +83,17 @@ export function resolveCommands(
         // Apply this machine's overrides to both the command and the cd directory.
         const overrides = setting.overrides ?? [];
 
+        // Validate the optional color chip once. Only hex values survive, so
+        // the tree can embed the value into an SVG icon without escaping.
+        const color = normalizeColor(cmd.color);
+
+        // Trigger mode and auto-run schedule. Anything that is not explicitly
+        // 'auto' stays manual; the interval is only meaningful for auto runs.
+        const type: CommandType = cmd.type === 'auto' ? 'auto' : 'manual';
+        const autoInterval = type === 'auto'
+            ? normalizeAutoRunInterval(cmd.autoRunIntervalMinutes)
+            : undefined;
+
         // A VS Code-command entry never reaches a terminal, so it has neither a
         // cd prefix nor a shell line. Overrides still apply, to its string
         // arguments only, so a per-machine value (an address, a path) is
@@ -84,6 +106,10 @@ export function resolveCommands(
             out.push({
                 name: cmd.name,
                 description: (cmd.description ?? '').trim(),
+                color,
+                type,
+                autoRunIntervalMinutes: autoInterval?.minMinutes,
+                autoRunIntervalMaxMinutes: autoInterval?.maxMinutes,
                 project,
                 directory: '',
                 command: '',
@@ -100,6 +126,10 @@ export function resolveCommands(
         out.push({
             name: cmd.name,
             description: (cmd.description ?? '').trim(),
+            color,
+            type,
+            autoRunIntervalMinutes: autoInterval?.minMinutes,
+            autoRunIntervalMaxMinutes: autoInterval?.maxMinutes,
             project,
             directory,
             command,
@@ -122,6 +152,47 @@ function isValid(cmd: CommandConfig): boolean {
     const hasShellCommand = typeof cmd.command === 'string';
     const hasVscodeCommand = typeof cmd.vscodeCommand === 'string' && cmd.vscodeCommand.trim().length > 0;
     return hasShellCommand || hasVscodeCommand;
+}
+
+// Validate an optional user-provided color. Only 3- or 6-digit hex values are
+// accepted, normalized to lowercase; anything else resolves to undefined so a
+// malformed entry degrades to "no chip" instead of leaking into an SVG icon.
+export function normalizeColor(value: string | undefined): string | undefined {
+    const color = (value ?? '').trim().toLowerCase();
+    return /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/.test(color) ? color : undefined;
+}
+
+/** Default number of minutes between auto runs when none is configured. */
+export const DEFAULT_AUTO_RUN_INTERVAL_MINUTES = 5;
+
+/** Validated auto-run schedule: a fixed interval when both values match,
+ *  otherwise a random delay picked between them on every run. */
+export interface AutoRunInterval {
+    minMinutes: number;
+    maxMinutes: number;
+}
+
+// Validate the configured auto-run interval: a single number is a fixed
+// interval, a [min, max] pair is a random range (whole minutes, at least one,
+// order-insensitive). Anything unusable falls back to the default fixed
+// interval, so a bad setting can never spin the scheduler into a hot loop.
+export function normalizeAutoRunInterval(value: unknown): AutoRunInterval {
+    const defaultInterval: AutoRunInterval = {
+        minMinutes: DEFAULT_AUTO_RUN_INTERVAL_MINUTES,
+        maxMinutes: DEFAULT_AUTO_RUN_INTERVAL_MINUTES,
+    };
+    if (typeof value === 'number') {
+        const minutes = Math.floor(value);
+        return minutes >= 1 ? { minMinutes: minutes, maxMinutes: minutes } : defaultInterval;
+    }
+    if (Array.isArray(value) && value.length === 2) {
+        const first = Math.floor(Number(value[0]));
+        const second = Math.floor(Number(value[1]));
+        if (Number.isFinite(first) && Number.isFinite(second) && first >= 1 && second >= 1) {
+            return { minMinutes: Math.min(first, second), maxMinutes: Math.max(first, second) };
+        }
+    }
+    return defaultInterval;
 }
 
 // Look up the MachineSetting whose machineName matches the current host.

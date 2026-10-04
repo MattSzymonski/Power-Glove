@@ -1,8 +1,9 @@
 // This file unit-tests the pure resolver in src/resolver.ts.
 // - Exercises machine show/hide filtering, project-substring matching,
 //   <KEY> override substitution (incl. repeated and missing placeholders),
-//   Windows vs POSIX shell building, description handling, invalid-input
-//   skipping, and ordering guarantees.
+//   Windows vs POSIX shell building, description handling, color
+//   validation, command type and auto-run interval resolution,
+//   invalid-input skipping, and ordering guarantees.
 // - Has no vscode interaction; runs as plain Mocha inside the extension
 //   host alongside the activation tests.
 
@@ -179,5 +180,72 @@ suite('resolveCommands', () => {
             opts({ workspacePaths: ['/work/web', '/work/payments-svc'] }),
         );
         assert.strictEqual(out.length, 1);
+    });
+
+    test('normalizes valid hex colors for resolved commands', () => {
+        const out = resolveCommands(
+            [
+                makeCmd({ name: 'upper', color: '  #E5484D ' }),
+                makeCmd({ name: 'short', color: '#AbC' }),
+            ],
+            opts(),
+        );
+        assert.strictEqual(out[0].color, '#e5484d');
+        assert.strictEqual(out[1].color, '#abc');
+    });
+
+    test('drops malformed colors instead of failing resolution', () => {
+        const out = resolveCommands(
+            [
+                makeCmd({ name: 'named', color: 'red' }),
+                makeCmd({ name: 'noHash', color: 'ff0000' }),
+                makeCmd({ name: 'tooLong', color: '#ff0000aa' }),
+            ],
+            opts(),
+        );
+        assert.strictEqual(out.length, 3);
+        assert.ok(out.every((r) => r.color === undefined), 'expected invalid colors to be dropped');
+    });
+
+    test('defaults the command type to manual and drops the interval', () => {
+        const [r] = resolveCommands([makeCmd({ autoRunIntervalMinutes: 10 })], opts());
+        assert.strictEqual(r.type, 'manual');
+        assert.strictEqual(r.autoRunIntervalMinutes, undefined);
+        assert.strictEqual(r.autoRunIntervalMaxMinutes, undefined);
+    });
+
+    test('resolves auto commands with a validated interval', () => {
+        const out = resolveCommands(
+            [
+                makeCmd({ name: 'default', type: 'auto' }),
+                makeCmd({ name: 'custom', type: 'auto', autoRunIntervalMinutes: 15.7 }),
+                makeCmd({ name: 'bad', type: 'auto', autoRunIntervalMinutes: 0 }),
+            ],
+            opts(),
+        );
+        assert.strictEqual(out[0].type, 'auto');
+        assert.strictEqual(out[0].autoRunIntervalMinutes, 5);
+        assert.strictEqual(out[0].autoRunIntervalMaxMinutes, 5);
+        assert.strictEqual(out[1].autoRunIntervalMinutes, 15);
+        assert.strictEqual(out[1].autoRunIntervalMaxMinutes, 15);
+        assert.strictEqual(out[2].autoRunIntervalMinutes, 5);
+        assert.strictEqual(out[2].autoRunIntervalMaxMinutes, 5);
+    });
+
+    test('supports random auto-run intervals given as [min, max]', () => {
+        const out = resolveCommands(
+            [
+                makeCmd({ name: 'range', type: 'auto', autoRunIntervalMinutes: [1, 3] }),
+                makeCmd({ name: 'swapped', type: 'auto', autoRunIntervalMinutes: [3, 1] }),
+                makeCmd({ name: 'badRange', type: 'auto', autoRunIntervalMinutes: [0, 3] }),
+            ],
+            opts(),
+        );
+        assert.strictEqual(out[0].autoRunIntervalMinutes, 1);
+        assert.strictEqual(out[0].autoRunIntervalMaxMinutes, 3);
+        assert.strictEqual(out[1].autoRunIntervalMinutes, 1);
+        assert.strictEqual(out[1].autoRunIntervalMaxMinutes, 3);
+        assert.strictEqual(out[2].autoRunIntervalMinutes, 5);
+        assert.strictEqual(out[2].autoRunIntervalMaxMinutes, 5);
     });
 });

@@ -1,7 +1,8 @@
 // This file implements the Power Glove Commands Manager webview.
 // - openCommandsManager() opens (or reveals) a single WebviewPanel that
 //   provides full CRUD over Power Glove commands: add/edit/duplicate/
-//   delete/reorder, plus per-machine settings and <KEY> overrides.
+//   delete/reorder, per-command colors and trigger types, plus per-machine
+//   settings and <KEY> overrides.
 // - Persists changes to the power-glove-commands.json file via config.ts.
 // - Listens for configuration changes (commands file path) and live-refreshes.
 // - The webview is plain HTML/CSS/JS with inline Lucide SVG icons.
@@ -126,6 +127,12 @@ async function handleMessage(msg: InboundMessage): Promise<void> {
 function normalize(c: CommandConfig): CommandConfig {
 	const normalized: CommandConfig = { name: c?.name ?? '' };
 	if (c?.description) { normalized.description = c.description; }
+	if (c?.color) { normalized.color = c.color; }
+	if (c?.type === 'auto') { normalized.type = 'auto'; }
+	const interval = c?.autoRunIntervalMinutes;
+	if (typeof interval === 'number' || Array.isArray(interval)) {
+		normalized.autoRunIntervalMinutes = interval;
+	}
 	normalized.project = c?.project ?? '';
 	normalized.directory = c?.directory ?? '';
 	normalized.command = c?.command ?? '';
@@ -293,6 +300,44 @@ function renderHtml(): string {
 	}
 	.project-dropdown .pd-item:hover { background: var(--vscode-list-hoverBackground); }
 	.project-dropdown .pd-empty { padding: 6px 10px; opacity: 0.6; font-style: italic; }
+	.color-dot {
+		width: 10px; height: 10px; border-radius: 2px; flex: 0 0 auto;
+		border: 1px solid var(--vscode-panel-border);
+	}
+	.color-dot.hidden { display: none; }
+	.color-row { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+	.color-row .swatches { display: inline-flex; gap: 4px; }
+	.color-row .swatch {
+		width: 20px; height: 20px; padding: 0; border-radius: 3px;
+		border: 1px solid var(--vscode-panel-border); cursor: pointer;
+		position: relative; box-sizing: border-box;
+	}
+	.color-row .swatch:hover { transform: scale(1.08); }
+	.color-row .swatch.selected { outline: 2px solid var(--vscode-focusBorder); outline-offset: 1px; }
+	.color-row .swatch.none { background: transparent; }
+	.color-row .swatch.none::after {
+		content: ''; position: absolute; inset: 3px;
+		background: linear-gradient(to bottom right,
+			transparent calc(50% - 1px), var(--vscode-foreground) calc(50% - 1px),
+			var(--vscode-foreground) calc(50% + 1px), transparent calc(50% + 1px));
+		opacity: 0.6;
+	}
+	.color-row .color-hex {
+		width: 92px; flex: 0 0 auto;
+		font-family: var(--vscode-editor-font-family);
+	}
+	select {
+		font: inherit;
+		color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
+		background: var(--vscode-dropdown-background, var(--vscode-input-background));
+		border: 1px solid var(--vscode-dropdown-border, var(--vscode-input-border, transparent));
+		padding: 5px 7px; border-radius: 2px; width: 100%; box-sizing: border-box;
+	}
+	.type-chip {
+		font-size: 0.72em; letter-spacing: 0.06em; text-transform: uppercase;
+		border: 1px solid var(--vscode-panel-border); border-radius: 3px;
+		padding: 0 4px; opacity: 0.7; flex: 0 0 auto;
+	}
 	input[type="text"], textarea {
 		font: inherit;
 		font-family: var(--vscode-editor-font-family);
@@ -380,11 +425,21 @@ function renderHtml(): string {
 	<h3>Fields</h3>
 	<ul>
 		<li><b>Name</b> — a short, human-readable label for the command (shown in the picker and tree view).</li>
+		<li><b>Type</b> — <i>Manual run command</i> appears in the picker and the top sidebar section. <i>Auto run command</i> runs itself in the background and reports in the bottom "Auto Run" section.</li>
+		<li><b>Auto run interval</b> — minutes between background runs of an auto command (minimum 1; default 5). Use a range like <code>1-3</code> to schedule each run after a random delay in that range.</li>
 		<li><b>Description</b> — optional extra detail displayed alongside the command name in the picker.</li>
+		<li><b>Color</b> — optional square shown before the command in the sidebar tree. Pick a preset or type any <code>#rgb</code> / <code>#rrggbb</code> value.</li>
 		<li><b>Project filter</b> — restricts the command to workspaces whose folder path contains this text. Leave empty to make the command available in all projects.</li>
 		<li><b>Working directory</b> — when set, the shell first <code>cd</code>s into this folder before running the command. Uses <code>cd /d</code> on Windows, <code>cd</code> elsewhere.</li>
 		<li><b>Shell command</b> — the command passed to the shell. Use <code>&lt;KEY&gt;</code> placeholders that get replaced by per-machine overrides.</li>
 		<li><b>Machine settings</b> — control which machines see this command. Enable <i>Show</i> for each machine where it should appear. Per-machine <i>overrides</i> fill in <code>&lt;KEY&gt;</code> tokens in the command and working directory.</li>
+	</ul>
+	<h3>Auto run output format</h3>
+	<p>Auto commands must print one line in the format <code>&lt;COLOR&gt;|&lt;RESULT_MESSAGE&gt;|&lt;POPUP_MESSAGE&gt;</code>:</p>
+	<ul>
+		<li><code>COLOR</code> is required: <code>red</code>, <code>yellow</code>, or <code>green</code> — it colors the dot in the Auto Run tree.</li>
+		<li><code>RESULT_MESSAGE</code> is shown next to the command in the Auto Run tree (empty = nothing shown).</li>
+		<li><code>POPUP_MESSAGE</code>, when non-empty, raises a notification (green: info, yellow: warning, red: error).</li>
 	</ul>
 	<h3>Tips</h3>
 	<ul>
@@ -397,7 +452,9 @@ function renderHtml(): string {
 	<div class="card" data-idx="">
 		<div class="card-head">
 			<span class="chev"></span>
+			<span class="color-dot hidden"></span>
 			<span class="name"></span>
+			<span class="type-chip" style="display:none">auto</span>
 			<span class="preview"></span>
 			<div class="toolbar">
 				<button class="icon" data-act="up" title="Move up" data-icon="up"></button>
@@ -408,8 +465,11 @@ function renderHtml(): string {
 			</div>
 		</div>
 		<div class="card-body">
+			<div class="field"><label>Type</label><select data-bind="type"><option value="manual">Manual run command</option><option value="auto">Auto run command</option></select></div>
+			<div class="field auto-interval-field" style="display:none"><label>Auto run interval (minutes, or a range like 1-3 for random runs)</label><input type="text" data-bind="autoRunIntervalMinutes" placeholder="e.g. 5 or 1-3" spellcheck="false" /></div>
 			<div class="field"><label>Name</label><input type="text" data-bind="name" /></div>
 			<div class="field"><label>Description — optional help text shown in the command picker</label><input type="text" data-bind="description" /></div>
+			<div class="field"><label>Color — square shown before the command in the sidebar tree</label><div class="color-row"><span class="swatches"></span><input type="text" class="color-hex" maxlength="7" placeholder="#RRGGBB" spellcheck="false" /></div></div>
 			<div class="field"><label>Project filter — command only appears in workspaces whose folder path contains this text; leave empty to show everywhere</label><div class="project-wrap"><input type="text" data-bind="project" /><button class="icon project-drop-btn" title="Pick existing project" data-icon="down"></button></div></div>
 			<div class="field"><label>Working directory — the command runs from this folder; empty uses the terminal's current directory</label><div class="project-wrap"><input type="text" data-bind="directory" /><button class="icon dir-pick-btn" title="Browse for directory" data-icon="folder"></button></div></div>
 			<div class="field"><label>Shell command — the command to run. Use &lt;KEY&gt; placeholders for per-machine values</label><textarea data-bind="command"></textarea></div>
@@ -470,6 +530,17 @@ function renderHtml(): string {
 	// Replace every [data-icon] placeholder under \`scope\` with its inline SVG.
 	function hydrateIcons(scope) {
 		scope.querySelectorAll('[data-icon]').forEach((el) => setIcon(el, el.dataset.icon));
+	}
+
+	// Palette offered as one-click swatches; the hex field accepts any other
+	// #rgb / #rrggbb value.
+	const COLOR_PRESETS = ['#e5484d', '#f76b15', '#f5c542', '#46a758', '#12a594', '#3b82f6', '#8e4ec6', '#d6409f', '#8b8d98'];
+
+	// Return a lowercase hex color when the value is a valid #rgb/#rrggbb
+	// string, or '' for empty/invalid input (treated as "no color").
+	function normalizeHex(value) {
+		const s = (value || '').trim().toLowerCase();
+		return /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/.test(s) ? s : '';
 	}
 
 	const root = document.getElementById('root');
@@ -646,6 +717,138 @@ function renderHtml(): string {
 		bind('project');
 		bind('directory');
 		bind('command');
+
+		// Color chip: preset swatches plus a free-form hex field. The chosen
+		// color appears on the card head and as a square in front of the row in
+		// the sidebar tree. Clearing the color deletes the key entirely so the
+		// stored JSON stays free of empty placeholders.
+		const dot = node.querySelector('.color-dot');
+		const swatchesEl = node.querySelector('.color-row .swatches');
+		const hexInput = node.querySelector('.color-hex');
+
+		// Sync the dot, the swatch highlight, and (when not being typed in) the
+		// hex field with c.color.
+		const renderColor = () => {
+			const color = normalizeHex(c.color);
+			dot.classList.toggle('hidden', !color);
+			dot.style.background = color || '';
+			swatchesEl.querySelectorAll('.swatch').forEach((sw) => {
+				sw.classList.toggle('selected', (sw.dataset.color || '') === color);
+			});
+			if (document.activeElement !== hexInput) { hexInput.value = color; }
+		};
+
+		const noneSwatch = document.createElement('button');
+		noneSwatch.className = 'swatch none';
+		noneSwatch.dataset.color = '';
+		noneSwatch.title = 'No color';
+		swatchesEl.appendChild(noneSwatch);
+		for (const preset of COLOR_PRESETS) {
+			const sw = document.createElement('button');
+			sw.className = 'swatch';
+			sw.dataset.color = preset;
+			sw.title = preset;
+			sw.style.background = preset;
+			swatchesEl.appendChild(sw);
+		}
+		swatchesEl.addEventListener('click', (ev) => {
+			const sw = ev.target.closest('.swatch');
+			if (!sw) { return; }
+			const color = sw.dataset.color || '';
+			if (color) { c.color = color; } else { delete c.color; }
+			renderColor();
+			save();
+		});
+		// Free typing: valid values apply immediately; invalid partial input
+		// stays visible while typing and reverts to the stored value on blur.
+		hexInput.addEventListener('input', () => {
+			const raw = hexInput.value.trim().toLowerCase();
+			const color = normalizeHex(raw);
+			if (raw === '') {
+				delete c.color;
+			} else if (color) {
+				c.color = color;
+			} else {
+				return;
+			}
+			renderColor();
+			debouncedSave();
+		});
+		hexInput.addEventListener('blur', () => { hexInput.value = normalizeHex(c.color); });
+		renderColor();
+
+		// Command type + auto-run interval: the dropdown switches between the
+		// manual (default) and auto modes. The interval field and the "auto"
+		// chip on the card head are only shown for auto commands.
+		const typeSelect = node.querySelector('[data-bind="type"]');
+		const typeChip = node.querySelector('.type-chip');
+		const intervalField = node.querySelector('.auto-interval-field');
+		const intervalInput = node.querySelector('[data-bind="autoRunIntervalMinutes"]');
+		// Parse the interval field: "5" is a fixed interval, "1-3" is a random
+		// range. Invalid or half-typed values return null so they are not
+		// saved; blur falls back to the default.
+		const parseInterval = () => {
+			const text = intervalInput.value.trim();
+			const single = /^(\d+)$/.exec(text);
+			if (single) {
+				const minutes = Number(single[1]);
+				return minutes >= 1 ? minutes : null;
+			}
+			const range = /^(\d+)\s*-\s*(\d+)$/.exec(text);
+			if (range) {
+				const first = Number(range[1]);
+				const second = Number(range[2]);
+				if (first >= 1 && second >= 1) {
+					return [Math.min(first, second), Math.max(first, second)];
+				}
+			}
+			return null;
+		};
+		// Render an interval value back into the field: "5" or "1-3".
+		const formatInterval = (value) => {
+			if (Array.isArray(value) && value.length === 2) { return value[0] + '-' + value[1]; }
+			return typeof value === 'number' ? String(value) : '5';
+		};
+		const applyTypeUi = () => {
+			const isAuto = typeSelect.value === 'auto';
+			typeChip.style.display = isAuto ? '' : 'none';
+			intervalField.style.display = isAuto ? '' : 'none';
+		};
+		// Entries without a type are manual; showing that explicitly in the
+		// dropdown keeps older commands files working without rewriting them.
+		typeSelect.value = c.type === 'auto' ? 'auto' : 'manual';
+		intervalInput.value = formatInterval(c.autoRunIntervalMinutes);
+		typeSelect.addEventListener('change', () => {
+			if (typeSelect.value === 'auto') {
+				c.type = 'auto';
+				if (typeof c.autoRunIntervalMinutes !== 'number' && !Array.isArray(c.autoRunIntervalMinutes)) {
+					c.autoRunIntervalMinutes = 5;
+					intervalInput.value = '5';
+				}
+			} else {
+				// Keep the interval value around so toggling back is lossless;
+				// the resolver ignores it for manual entries.
+				delete c.type;
+			}
+			applyTypeUi();
+			save();
+		});
+		// Interval edits apply live; an empty or invalid value falls back to
+		// the default on blur so the stored interval is always sane.
+		intervalInput.addEventListener('input', () => {
+			const parsed = parseInterval();
+			if (parsed !== null) {
+				c.autoRunIntervalMinutes = parsed;
+				debouncedSave();
+			}
+		});
+		intervalInput.addEventListener('blur', () => {
+			const parsed = parseInterval();
+			c.autoRunIntervalMinutes = parsed !== null ? parsed : 5;
+			intervalInput.value = formatInterval(c.autoRunIntervalMinutes);
+			save();
+		});
+		applyTypeUi();
 
 		// Project value dropdown: lists all distinct project values in state.
 		const projectInput = node.querySelector('[data-bind="project"]');

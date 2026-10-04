@@ -47,7 +47,8 @@
       },
       {
         "command": "powerGlove.openManager",
-        "title": "Power Glove: Manage Commands (UI)"
+        "title": "Power Glove: Manage Commands (UI)",
+        "icon": "$(gear)"
       },
       {
         "command": "powerGlove.openManagerJson",
@@ -84,6 +85,16 @@
         "command": "powerGlove.refreshTree",
         "title": "Refresh Commands",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "powerGlove.auto.runNow",
+        "title": "Run Now",
+        "icon": "$(play)"
+      },
+      {
+        "command": "powerGlove.auto.runAll",
+        "title": "Power Glove: Run All Auto Commands Now",
+        "icon": "$(run-all)"
       }
     ],
     "configuration": {
@@ -99,26 +110,54 @@
     "menus": {
       "view/title": [
         {
+          "command": "powerGlove.openManager",
+          "when": "view == powerGlove.commands",
+          "group": "navigation@0"
+        },
+        {
           "command": "powerGlove.refreshTree",
           "when": "view == powerGlove.commands",
           "group": "navigation@1"
+        },
+        {
+          "command": "powerGlove.auto.runAll",
+          "when": "view == powerGlove.commands",
+          "group": "navigation@2"
         }
       ],
       "view/item/context": [
         {
-          "command": "powerGlove.tree.runCurrent",
+          "command": "powerGlove.tree.runNew",
           "when": "view == powerGlove.commands && viewItem == command",
           "group": "inline@1"
         },
         {
-          "command": "powerGlove.tree.runNew",
+          "command": "powerGlove.tree.showInfo",
           "when": "view == powerGlove.commands && viewItem == command",
           "group": "inline@2"
         },
         {
+          "command": "powerGlove.auto.runNow",
+          "when": "view == powerGlove.commands && viewItem == autoCommand",
+          "group": "1_run@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "powerGlove.tree.runCurrent",
+          "when": "false"
+        },
+        {
+          "command": "powerGlove.tree.runNew",
+          "when": "false"
+        },
+        {
           "command": "powerGlove.tree.showInfo",
-          "when": "view == powerGlove.commands && viewItem == command",
-          "group": "inline@3"
+          "when": "false"
+        },
+        {
+          "command": "powerGlove.auto.runNow",
+          "when": "false"
         }
       ]
     }

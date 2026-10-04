@@ -24,13 +24,33 @@ Run any of your saved shell commands from a single Quick Pick popup.
 A webview that lets you edit your Power Glove commands without hand-editing JSON.
 
 - **Open Manager** - Run `Power Glove: Manage Commands` from the Command Palette, or click the gear button in the picker.
-- **Add / Edit** - Use `+ New command` to append a new entry. Click any row to expand and edit its name, description, project, directory, command, and per-machine settings.
+- **Add / Edit** - Use `+ New command` to append a new entry. Click any row to expand and edit its type, name, description, color, project, directory, command, and per-machine settings.
 - **Reorder** - Use the up/down arrows on each row to change command order.
 - **Duplicate** - The copy button creates a clone of the row.
 - **Delete (two-step)** - Click the delete button once to arm it (it turns red and says "Confirm?"); click again within ~2.5 s to remove. The button auto-disarms otherwise.
 - **Auto-save** - Every change is persisted immediately to your `power-glove-commands.json` file.
 - **Machine view** - A "Only show commands for this machine" toggle dims commands that wouldn't appear on the detected host.
 - **Help** - A `?` button reveals an inline cheat-sheet at the bottom of the manager.
+
+### Auto Run Commands
+
+The **Auto Run** section at the bottom of the Power Glove sidebar lists commands whose **Type** is set to *Auto run command*. They run themselves in the background every N minutes (configurable per command, default 5) and report their result in the sidebar.
+
+- **Row icons** - Every command row starts with the command's color bar (a slim vertical rectangle; a muted placeholder when no color is set), followed by a dark gray divider line. Auto rows then show the status dot: green, yellow, or red; a hollow dot means no valid result yet.
+- **Row format** - Rows read `[▌│●] name · result message`; the message is clipped by VS Code when space runs out. The command description is available in the row tooltip.
+- **Run now** - Click a row (or press Enter on it) to run that command immediately. The title-bar button reruns all auto commands.
+- **Notifications** - A command can raise a VS Code notification by returning a non-empty popup message.
+- **Scheduling** - Auto commands run while VS Code is open and are rescheduled automatically when the commands file changes.
+
+Auto commands must print **one line** in this format:
+
+    <COLOR>|<RESULT_MESSAGE>|<POPUP_MESSAGE>
+
+- `COLOR` is required: `red`, `yellow`, or `green` (case-insensitive).
+- `RESULT_MESSAGE` may be empty (nothing is shown in the row); long messages are clipped.
+- `POPUP_MESSAGE` may be empty (no notification); when non-empty it raises an information / warning / error notification for green / yellow / red.
+
+The parser scans stdout from the bottom up and uses the **last** valid line, so a script may log other output before its status line.
 
 ### Per-Machine Filtering and Overrides
 
@@ -124,6 +144,7 @@ The `power-glove-commands.json` file contains a JSON array of command objects:
     {
       "name": "Build (release)",
       "description": "Compile the project in release mode",
+      "color": "#e5484d",
       "project": "my-app",
       "directory": "<REPO>",
       "command": "cargo build --release --manifest-path <REPO>/crate/Cargo.toml",
@@ -145,8 +166,11 @@ The `power-glove-commands.json` file contains a JSON array of command objects:
       ]
     },
     {
-      "name": "Tail logs",
-      "command": "tail -f /var/log/syslog",
+      "name": "Disk space check",
+      "description": "Alerts when the root volume runs low",
+      "type": "auto",
+      "autoRunIntervalMinutes": 30,
+      "command": "df -h / | tail -1",
       "machineSettings": [
         { "machineName": "build-server", "show": true },
         { "machineName": "my-laptop",    "show": false }
@@ -162,6 +186,9 @@ The `power-glove-commands.json` file contains a JSON array of command objects:
 | ------------------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `name`                          | string                  | Display label shown in the picker.                                                                                                                          |
 | `description`                   | string                  | Optional short text shown next to the name in the picker.                                                                                                   |
+| `color`                         | string                  | Optional hex color (`#rgb` or `#rrggbb`) shown as a filled square before the command in the sidebar tree.                                                   |
+| `type`                          | string                  | `manual` (default) or `auto`. Auto commands run in the background and report in the Auto Run sidebar section.                                               |
+| `autoRunIntervalMinutes`        | number or `[min, max]`  | Minutes between background runs of an `auto` command. Whole minutes >= 1; default 5. A pair like `[1, 3]` schedules each run after a random delay in that range. |
 | `project`                       | string                  | If non-empty, command is shown only when at least one open workspace folder path **contains** this substring. Empty = always shown.                         |
 | `directory`                     | string                  | If non-empty, command is prefixed with `cd /d "<dir>" && …` (Windows) or `cd "<dir>" && …` (POSIX). May contain `<KEY>` tokens.                             |
 | `command`                       | string                  | Shell command line. May contain `<KEY>` tokens.                                                                                                             |

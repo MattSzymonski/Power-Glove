@@ -6,7 +6,9 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 
-const EXT_ID = 'undefined_publisher.power-glove';
+// Must match "<publisher>.<name>" as declared in package.json; the test host
+// loads the extension via --extensionDevelopmentPath, which uses that id.
+const EXT_ID = 'MattSzymonski.power-glove';
 
 const EXPECTED_COMMANDS = [
 	'powerGlove.openUI',
@@ -14,6 +16,8 @@ const EXPECTED_COMMANDS = [
 	'powerGlove.openManagerJson',
 	'powerGlove.runInCurrentTerminal',
 	'powerGlove.runInNewTerminal',
+	'powerGlove.auto.runNow',
+	'powerGlove.auto.runAll',
 ];
 
 suite('Power Glove · activation', () => {

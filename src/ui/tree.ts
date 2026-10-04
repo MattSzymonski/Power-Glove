@@ -1,20 +1,35 @@
-// This file implements Power Glove's sidebar tree view, similar to the
-// Timeline or Outline panels in VS Code. It displays resolved commands
-// grouped by project with inline action buttons.
+// This file implements Power Glove's single sidebar tree view, split into
+// two internal sections: the manual commands (grouped by project, on top)
+// and the "Auto Run" section (auto commands with their latest background
+// result, pinned to the bottom).
 //
-// - CommandsTreeDataProvider implements vscode.TreeDataProvider, grouping
-//   commands by their `project` field under collapsible folder headers.
+// - CommandsTreeDataProvider implements vscode.TreeDataProvider for both
+//   sections: manual leaves under project group headers, plus one Auto Run
+//   section header with a status row per auto command.
+// - Every command row icon is a color square (muted placeholder when unset)
+//   plus a dark gray divider; auto rows append the red/yellow/green dot.
 // - CommandTreeItem is a thin TreeItem subclass that carries the minimum
 //   identity fields (commandName, groupName) so inline command handlers can
 //   look up the full ResolvedCommand from the provider's internal map.
 // - The provider exposes getResolvedCommand(name) so the extension entry
-//   point can wire up the three inline actions:
-//     ▶ Run in current terminal
-//     ▣ Run in new terminal
-//     ⓘ Show command details
+//   point can wire up the default row-click action and the inline actions:
+//     row click / Enter -> run in current terminal
+//     ▣ run in new terminal (inline button)
+//     ⓘ show command details (inline button)
+// - setRunning()/setResult() feed the Auto Run rows from the background
+//   engine; refresh() replaces both sections' data in one go.
 
 import * as vscode from 'vscode';
 import { ResolvedCommand } from '../resolver';
+import { AutoRunResult, AutoRunStatus } from '../autorun';
+
+// Dot colors for auto-run rows, following the classic traffic-light mapping;
+// "unknown" is drawn as a hollow ring for "never ran or unreadable verdict".
+const STATUS_DOT_FILL: Record<Exclude<AutoRunStatus, 'unknown'>, string> = {
+    green: '#3fb950',
+    yellow: '#d29922',
+    red: '#f85149',
+};
 
 // Lightweight TreeItem subclass. We intentionally avoid storing the full
 // ResolvedCommand on the item because VS Code may serialise tree items
@@ -51,14 +66,22 @@ export class CommandsTreeDataProvider implements vscode.TreeDataProvider<Command
     // Quick lookup from command name → ResolvedCommand for inline action handlers.
     private commandMap = new Map<string, ResolvedCommand>();
 
+    // Auto Run section: current commands, latest results, and the names of
+    // commands whose background run is currently in flight.
+    private autoCommands: ResolvedCommand[] = [];
+    private readonly autoResults = new Map<string, AutoRunResult>();
+    private readonly runningAutoNames = new Set<string>();
+
     // ---------------------------------------------------------------------------
     // Public API
     // ---------------------------------------------------------------------------
 
-    /** Replace the entire dataset and refresh the tree. Called on activation,
-     *  config changes, and workspace-folder changes. */
-    refresh(commands: ResolvedCommand[]): void {
+    /** Replace both sections' data and refresh the tree. Called on
+     *  activation, config changes, workspace-folder changes, and after
+     *  commands-file edits. */
+    refresh(commands: ResolvedCommand[], autoCommands: ResolvedCommand[]): void {
         this.resolvedCommands = commands;
+        this.autoCommands = autoCommands;
         this.commandMap = new Map(commands.map((c) => [c.name, c]));
 
         const groups = new Set<string>();
@@ -73,6 +96,12 @@ export class CommandsTreeDataProvider implements vscode.TreeDataProvider<Command
             return a.localeCompare(b);
         });
 
+        // Drop results for auto commands that disappeared (renames, deletes).
+        const autoNames = new Set(autoCommands.map((c) => c.name));
+        for (const name of [...this.autoResults.keys()]) {
+            if (!autoNames.has(name)) { this.autoResults.delete(name); }
+        }
+
         this._onDidChangeTreeData.fire();
     }
 
@@ -80,6 +109,23 @@ export class CommandsTreeDataProvider implements vscode.TreeDataProvider<Command
      *  command is no longer in the current resolved set (stale click, etc.). */
     getResolvedCommand(name: string): ResolvedCommand | undefined {
         return this.commandMap.get(name);
+    }
+
+    /** Mark an auto command as currently running (or done running). */
+    setRunning(name: string, running: boolean): void {
+        if (running) {
+            this.runningAutoNames.add(name);
+        } else {
+            this.runningAutoNames.delete(name);
+        }
+        this._onDidChangeTreeData.fire();
+    }
+
+    /** Record the parsed result of a finished auto run. */
+    setResult(name: string, result: AutoRunResult): void {
+        this.autoResults.set(name, result);
+        this.runningAutoNames.delete(name);
+        this._onDidChangeTreeData.fire();
     }
 
     // ---------------------------------------------------------------------------
@@ -91,9 +137,10 @@ export class CommandsTreeDataProvider implements vscode.TreeDataProvider<Command
     }
 
     getChildren(element?: CommandTreeItem): CommandTreeItem[] {
-        // Root level → one folder item per project group.
+        // Root level → project groups for manual commands, then the Auto Run
+        // section pinned to the bottom of the tree.
         if (!element) {
-            return this.groupOrder.map((group) => {
+            const groups = this.groupOrder.map((group) => {
                 const count = this.resolvedCommands.filter(
                     (c) => (c.project || '(general)') === group,
                 ).length;
@@ -106,6 +153,25 @@ export class CommandsTreeDataProvider implements vscode.TreeDataProvider<Command
                 item.contextValue = 'group';
                 return item;
             });
+            const autoSection = this.buildAutoSection();
+            return autoSection ? [...groups, autoSection] : groups;
+        }
+
+        // Auto Run section → one status row per auto command, or a hint row
+        // (clickable, opens the manager) while there are none.
+        if (element.contextValue === 'autoSection') {
+            if (this.autoCommands.length === 0) {
+                const hint = new CommandTreeItem(
+                    'No auto-run commands',
+                    vscode.TreeItemCollapsibleState.None,
+                );
+                hint.iconPath = new vscode.ThemeIcon('info');
+                hint.description = 'set a command type to "Auto run command" in the manager';
+                hint.contextValue = 'autoHint';
+                hint.command = { command: 'powerGlove.openManager', title: 'Manage Commands' };
+                return [hint];
+            }
+            return this.autoCommands.map((cmd) => this.buildAutoItem(cmd));
         }
 
         // Group level → one leaf item per command in that group.
@@ -122,7 +188,9 @@ export class CommandsTreeDataProvider implements vscode.TreeDataProvider<Command
                     cmd.name,           // used by handlers for lookup
                     group,              // informational only
                 );
-                item.iconPath = new vscode.ThemeIcon('terminal');
+                // Same icon grammar as the auto rows, without the status dot:
+                // color square (muted placeholder when unset) + divider line.
+                item.iconPath = buildRowIcon(cmd.color, undefined);
                 item.description = cmd.description || undefined;
                 item.tooltip = buildTooltip(cmd);
                 item.contextValue = 'command';
@@ -130,7 +198,9 @@ export class CommandsTreeDataProvider implements vscode.TreeDataProvider<Command
                 // recover the ResolvedCommand from the provider's map.
                 item.id = cmd.name;
 
-                // Default click (Enter / single-click) → run in current terminal.
+                // Default action: clicking anywhere on the command row (or
+                // pressing Enter) runs it in the current terminal. This is why
+                // there is no dedicated run-current inline button anymore.
                 item.command = {
                     command: 'powerGlove.tree.runCurrent',
                     title: 'Run in Current Terminal',
@@ -142,6 +212,45 @@ export class CommandsTreeDataProvider implements vscode.TreeDataProvider<Command
         }
 
         return [];
+    }
+
+    // Build the "Auto Run" root section. Hidden only while the whole view is
+    // empty, in which case the view message explains how to add commands.
+    private buildAutoSection(): CommandTreeItem | undefined {
+        if (this.autoCommands.length === 0 && this.resolvedCommands.length === 0) {
+            return undefined;
+        }
+        const item = new CommandTreeItem('Auto Run', vscode.TreeItemCollapsibleState.Expanded);
+        item.iconPath = new vscode.ThemeIcon('pulse');
+        item.description = this.autoCommands.length > 0
+            ? `${this.autoCommands.length} command${this.autoCommands.length !== 1 ? 's' : ''}`
+            : 'none';
+        item.contextValue = 'autoSection';
+        return item;
+    }
+
+    // Build one Auto Run row: status dot, name, description + last message.
+    private buildAutoItem(command: ResolvedCommand): CommandTreeItem {
+        const result = this.autoResults.get(command.name);
+        const running = this.runningAutoNames.has(command.name);
+
+        const item = new CommandTreeItem(
+            command.name,
+            vscode.TreeItemCollapsibleState.None,
+            command.name,   // informational; the row runs via explicit args
+        );
+        item.id = command.name;
+        item.contextValue = 'autoCommand';
+        item.iconPath = buildRowIcon(command.color, result?.status ?? 'unknown');
+        item.description = buildAutoDescription(result, running);
+        item.tooltip = buildAutoTooltip(command, result, running);
+        // Row click / Enter runs the command now instead of opening details.
+        item.command = {
+            command: 'powerGlove.auto.runNow',
+            title: 'Run Now',
+            arguments: [command.name],
+        };
+        return item;
     }
 }
 
@@ -165,4 +274,84 @@ function buildTooltip(cmd: ResolvedCommand): vscode.MarkdownString {
  *  accidentally break the tooltip formatting. */
 function escapeMarkdown(text: string): string {
     return text.replace(/[\\`*_{}[\]()#+\-.!|]/g, '\\$&');
+}
+
+/** Build the icon shown at the start of every command row. The bar uses
+ *  the command's color (a muted placeholder when none is set) and is followed
+ *  by a dark gray divider line; auto rows append the result dot (red /
+ *  yellow / green, or a hollow ring while unknown). A base64 data-URI SVG is
+ *  used because ThemeIcon cannot render arbitrary user-picked colors; only
+ *  pre-validated hex values reach this function (see normalizeColor in
+ *  resolver.ts). The fixed grays are deliberate: SVG data URIs cannot read
+ *  VS Code theme colors, and these read acceptably on light and dark themes. */
+function buildRowIcon(color: string | undefined, status: AutoRunStatus | undefined): vscode.Uri {
+    const square = color
+        ? `fill="${color}" stroke="#808080" stroke-opacity="0.25"`
+        : 'fill="#8b949e" fill-opacity="0.0"';
+    // Every row icon lives in a fixed 16px slot (VS Code scales the image to
+    // 16px wide). The color chip is a slim vertical bar, then the divider,
+    // then (auto rows only) the status dot. The bar keeps the divider in the
+    // same spot in both sections, so the rows align visually.
+    let shapes: string;
+    if (status === undefined) {
+        shapes =
+            `<rect x="12.0" y="1.0" width="4" height="14" rx="1.25" ${square}/>`;
+    } else {
+        const dot = status === 'unknown'
+            ? '<circle cx="4.5" cy="8" r="4.5" fill="none" stroke="#8b949e" stroke-width="1.25"/>'
+            : `<circle cx="4.5" cy="8" r="4.5" fill="${STATUS_DOT_FILL[status]}"/>`;
+        shapes =
+            dot + `<rect x="12.0" y="1.0" width="4" height="14" rx="1.25" ${square}/>`;
+    }
+    const svg =
+        '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">' +
+        `${shapes}</svg>`;
+    const base64 = Buffer.from(svg, 'utf8').toString('base64');
+    return vscode.Uri.parse(`data:image/svg+xml;base64,${base64}`);
+}
+
+// Show only the last result message on an auto row; the command's own
+// description lives in the tooltip so the row stays focused on status.
+function buildAutoDescription(
+    result: AutoRunResult | undefined,
+    running: boolean,
+): string | undefined {
+    if (running) { return 'running…'; }
+    return result?.message || undefined;
+}
+
+// Build the hover tooltip for an auto row: interval, last verdict and its
+// messages, plus the resolved shell command for troubleshooting.
+function buildAutoTooltip(
+    command: ResolvedCommand,
+    result: AutoRunResult | undefined,
+    running: boolean,
+): vscode.MarkdownString {
+    const markdown = new vscode.MarkdownString();
+    markdown.appendMarkdown(`**${escapeMarkdown(command.name)}**\n\n`);
+    if (command.description) {
+        markdown.appendMarkdown(`${escapeMarkdown(command.description)}\n\n`);
+    }
+    const intervalLabel = command.autoRunIntervalMaxMinutes !== undefined &&
+            command.autoRunIntervalMaxMinutes !== command.autoRunIntervalMinutes
+        ? `${command.autoRunIntervalMinutes}-${command.autoRunIntervalMaxMinutes} min (random)`
+        : `${command.autoRunIntervalMinutes} min`;
+    markdown.appendMarkdown(`Runs every ${intervalLabel}.\n\n`);
+    if (running) {
+        markdown.appendMarkdown('Status: running…\n\n');
+    } else if (result) {
+        const verdict = result.invalid ? 'unknown (invalid output)' : result.status;
+        markdown.appendMarkdown(`Status: ${verdict}\n\n`);
+        if (result.message) {
+            markdown.appendMarkdown(`Result: ${escapeMarkdown(result.message)}\n\n`);
+        }
+        if (result.popupMessage) {
+            markdown.appendMarkdown(`Popup: ${escapeMarkdown(result.popupMessage)}\n\n`);
+        }
+        markdown.appendMarkdown(`Last run: ${new Date(result.finishedAt).toLocaleString()}\n\n`);
+    } else {
+        markdown.appendMarkdown('Status: waiting for the first run…\n\n');
+    }
+    markdown.appendMarkdown(`---\n\`\`\`shell\n${command.finalShellCommand}\n\`\`\``);
+    return markdown;
 }
