@@ -426,7 +426,7 @@ function renderHtml(): string {
 	<ul>
 		<li><b>Name</b> — a short, human-readable label for the command (shown in the picker and tree view).</li>
 		<li><b>Type</b> — <i>Manual run command</i> appears in the picker and the top sidebar section. <i>Auto run command</i> runs itself in the background and reports in the bottom "Auto Run" section.</li>
-		<li><b>Auto run interval</b> — minutes between background runs of an auto command (minimum 1; default 5). Use a range like <code>1-3</code> to schedule each run after a random delay in that range.</li>
+		<li><b>Auto run interval</b> — minutes between background runs of an auto command (minimum 0.1; default 5). Decimals are allowed (<code>0.5</code> runs every 30 seconds), and a range like <code>1-3</code> schedules each run after a random delay in that range.</li>
 		<li><b>Description</b> — optional extra detail displayed alongside the command name in the picker.</li>
 		<li><b>Color</b> — optional square shown before the command in the sidebar tree. Pick a preset or type any <code>#rgb</code> / <code>#rrggbb</code> value.</li>
 		<li><b>Project filter</b> — restricts the command to workspaces whose folder path contains this text. Leave empty to make the command available in all projects.</li>
@@ -466,7 +466,7 @@ function renderHtml(): string {
 		</div>
 		<div class="card-body">
 			<div class="field"><label>Type</label><select data-bind="type"><option value="manual">Manual run command</option><option value="auto">Auto run command</option></select></div>
-			<div class="field auto-interval-field" style="display:none"><label>Auto run interval (minutes, or a range like 1-3 for random runs)</label><input type="text" data-bind="autoRunIntervalMinutes" placeholder="e.g. 5 or 1-3" spellcheck="false" /></div>
+			<div class="field auto-interval-field" style="display:none"><label>Auto run interval (minutes — 0.5 = 30 s — or a random range like 1-3)</label><input type="text" data-bind="autoRunIntervalMinutes" placeholder="e.g. 5, 0.5 or 1-3" spellcheck="false" /></div>
 			<div class="field"><label>Name</label><input type="text" data-bind="name" /></div>
 			<div class="field"><label>Description — optional help text shown in the command picker</label><input type="text" data-bind="description" /></div>
 			<div class="field"><label>Color — square shown before the command in the sidebar tree</label><div class="color-row"><span class="swatches"></span><input type="text" class="color-hex" maxlength="7" placeholder="#RRGGBB" spellcheck="false" /></div></div>
@@ -784,21 +784,22 @@ function renderHtml(): string {
 		const typeChip = node.querySelector('.type-chip');
 		const intervalField = node.querySelector('.auto-interval-field');
 		const intervalInput = node.querySelector('[data-bind="autoRunIntervalMinutes"]');
-		// Parse the interval field: "5" is a fixed interval, "1-3" is a random
-		// range. Invalid or half-typed values return null so they are not
-		// saved; blur falls back to the default.
+		// Parse the interval field: "5" is a fixed interval, "0.5" is 30
+		// seconds, and "1-3" is a random range. Values below 0.1 minutes
+		// (six seconds) are rejected; invalid or half-typed input returns
+		// null so it is not saved and blur falls back to the default.
 		const parseInterval = () => {
 			const text = intervalInput.value.trim();
-			const single = /^(\d+)$/.exec(text);
+			const single = /^(\d+(?:\.\d+)?)$/.exec(text);
 			if (single) {
 				const minutes = Number(single[1]);
-				return minutes >= 1 ? minutes : null;
+				return minutes >= 0.1 ? minutes : null;
 			}
-			const range = /^(\d+)\s*-\s*(\d+)$/.exec(text);
+			const range = /^(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)$/.exec(text);
 			if (range) {
 				const first = Number(range[1]);
 				const second = Number(range[2]);
-				if (first >= 1 && second >= 1) {
+				if (first >= 0.1 && second >= 0.1) {
 					return [Math.min(first, second), Math.max(first, second)];
 				}
 			}

@@ -6,8 +6,9 @@
 // - CommandsTreeDataProvider implements vscode.TreeDataProvider for both
 //   sections: manual leaves under project group headers, plus one Auto Run
 //   section header with a status row per auto command.
-// - Every command row icon is a color square (muted placeholder when unset)
-//   plus a dark gray divider; auto rows append the red/yellow/green dot.
+// - Every command row icon is a full-height color bar hugging the right edge
+//   (transparent when the command has no color); auto rows add the
+//   red/yellow/green status dot on the left.
 // - CommandTreeItem is a thin TreeItem subclass that carries the minimum
 //   identity fields (commandName, groupName) so inline command handlers can
 //   look up the full ResolvedCommand from the provider's internal map.
@@ -189,7 +190,7 @@ export class CommandsTreeDataProvider implements vscode.TreeDataProvider<Command
                     group,              // informational only
                 );
                 // Same icon grammar as the auto rows, without the status dot:
-                // color square (muted placeholder when unset) + divider line.
+                // the color bar on the right is transparent when unset.
                 item.iconPath = buildRowIcon(cmd.color, undefined);
                 item.description = cmd.description || undefined;
                 item.tooltip = buildTooltip(cmd);
@@ -276,22 +277,21 @@ function escapeMarkdown(text: string): string {
     return text.replace(/[\\`*_{}[\]()#+\-.!|]/g, '\\$&');
 }
 
-/** Build the icon shown at the start of every command row. The bar uses
- *  the command's color (a muted placeholder when none is set) and is followed
- *  by a dark gray divider line; auto rows append the result dot (red /
- *  yellow / green, or a hollow ring while unknown). A base64 data-URI SVG is
- *  used because ThemeIcon cannot render arbitrary user-picked colors; only
- *  pre-validated hex values reach this function (see normalizeColor in
- *  resolver.ts). The fixed grays are deliberate: SVG data URIs cannot read
- *  VS Code theme colors, and these read acceptably on light and dark themes. */
+/** Build the icon shown at the start of every command row. The full-height
+ *  bar hugging the right edge uses the command's color (transparent when none
+ *  is set); auto rows put the result dot (red / yellow / green, or a hollow
+ *  ring while unknown) on the left. A base64 data-URI SVG is used because
+ *  ThemeIcon cannot render arbitrary user-picked colors; only pre-validated
+ *  hex values reach this function (see normalizeColor in resolver.ts). The
+ *  fixed grays are deliberate: SVG data URIs cannot read VS Code theme
+ *  colors, and these read acceptably on light and dark themes. */
 function buildRowIcon(color: string | undefined, status: AutoRunStatus | undefined): vscode.Uri {
     const square = color
         ? `fill="${color}" stroke="#808080" stroke-opacity="0.25"`
         : 'fill="#8b949e" fill-opacity="0.0"';
     // Every row icon lives in a fixed 16px slot (VS Code scales the image to
-    // 16px wide). The color chip is a slim vertical bar, then the divider,
-    // then (auto rows only) the status dot. The bar keeps the divider in the
-    // same spot in both sections, so the rows align visually.
+    // 16px wide): the status dot sits on the left, and the color bar hugs the
+    // right edge as a full-height accent.
     let shapes: string;
     if (status === undefined) {
         shapes =
@@ -332,11 +332,9 @@ function buildAutoTooltip(
     if (command.description) {
         markdown.appendMarkdown(`${escapeMarkdown(command.description)}\n\n`);
     }
-    const intervalLabel = command.autoRunIntervalMaxMinutes !== undefined &&
-            command.autoRunIntervalMaxMinutes !== command.autoRunIntervalMinutes
-        ? `${command.autoRunIntervalMinutes}-${command.autoRunIntervalMaxMinutes} min (random)`
-        : `${command.autoRunIntervalMinutes} min`;
-    markdown.appendMarkdown(`Runs every ${intervalLabel}.\n\n`);
+    markdown.appendMarkdown(
+        `Runs every ${formatIntervalLabel(command.autoRunIntervalMinutes, command.autoRunIntervalMaxMinutes)}.\n\n`,
+    );
     if (running) {
         markdown.appendMarkdown('Status: running…\n\n');
     } else if (result) {
@@ -354,4 +352,19 @@ function buildAutoTooltip(
     }
     markdown.appendMarkdown(`---\n\`\`\`shell\n${command.finalShellCommand}\n\`\`\``);
     return markdown;
+}
+
+// Render an interval as "5 min", "30 s", or "1-3 min (random)". Sub-minute
+// values are shown in seconds so "0.5" reads as "30 s" instead.
+function formatIntervalLabel(
+    minimumMinutes: number | undefined,
+    maximumMinutes: number | undefined,
+): string {
+    if (minimumMinutes === undefined) { return '?'; }
+    const asText = (minutes: number): string =>
+        minutes < 1 ? `${Math.round(minutes * 60)} s` : `${minutes} min`;
+    if (maximumMinutes !== undefined && maximumMinutes !== minimumMinutes) {
+        return `${asText(minimumMinutes)}-${asText(maximumMinutes)} (random)`;
+    }
+    return asText(minimumMinutes);
 }

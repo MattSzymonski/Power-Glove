@@ -2,8 +2,8 @@
 // - Verifies the single view renders two sections: manual project groups on
 //   top and the "Auto Run" section pinned to the bottom.
 // - Covers the auto hint row (no auto commands), status-row content after a
-//   result is recorded, row icon composition (color square, divider, status
-//   dot / placeholder), result pruning on refresh, and the hidden-section
+//   result is recorded, row icon composition (color bar, status dot /
+//   placeholder), result pruning on refresh, and the hidden-section
 //   case when the whole view is empty.
 
 import * as assert from 'assert';
@@ -103,7 +103,7 @@ suite('CommandsTreeDataProvider sections', () => {
         assert.strictEqual(provider.getChildren().length, 0);
     });
 
-    test('row icons combine the color square, divider, and status dot', () => {
+    test('row icons combine the color bar and the status dot', () => {
         const provider = new CommandsTreeDataProvider();
         provider.refresh(
             [{ ...manualCommand('Build'), color: '#12a594' }],
@@ -116,21 +116,20 @@ suite('CommandsTreeDataProvider sections', () => {
         const [group, autoSection] = provider.getChildren();
         const manualSvg = decodeIcon(provider.getChildren(group)[0]);
         assert.ok(manualSvg.includes('#12a594'), 'manual icon shows the command color');
-        assert.ok(manualSvg.includes('#6e7681'), 'manual icon shows the divider');
+        assert.ok(!manualSvg.includes('<circle'), 'manual icon has no status dot');
 
         const autoSvg = decodeIcon(provider.getChildren(autoSection)[0]);
         assert.ok(autoSvg.includes('#e5484d'), 'auto icon shows the command color');
-        assert.ok(autoSvg.includes('#6e7681'), 'auto icon shows the divider');
         assert.ok(autoSvg.includes('#3fb950'), 'auto icon shows the green status dot');
     });
 
-    test('rows without a color use the gray placeholder square', () => {
+    test('rows without a color draw a transparent placeholder bar', () => {
         const provider = new CommandsTreeDataProvider();
         provider.refresh([manualCommand('Build')], []);
 
         const [group] = provider.getChildren();
         const svg = decodeIcon(provider.getChildren(group)[0]);
         assert.ok(svg.includes('#8b949e'), 'placeholder gray is drawn');
-        assert.ok(svg.includes('#6e7681'), 'divider is drawn');
+        assert.ok(svg.includes('fill-opacity="0.0"'), 'placeholder bar is transparent');
     });
 });

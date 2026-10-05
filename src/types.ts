@@ -25,8 +25,9 @@ export interface CommandConfig {
      *  'manual' keeps it a picker/tree command. */
     type?: CommandType;
     /** Minutes between background runs when type is 'auto' (default 5).
-     *  A [min, max] pair (for example [1, 3]) schedules each next run after
-     *  a random delay in that range instead of a fixed interval. */
+     *  Fractional values are allowed (for example 0.5 = every 30 seconds).
+     *  A [min, max] pair schedules each next run after a random delay in
+     *  that range instead of a fixed interval. */
     autoRunIntervalMinutes?: number | [number, number];
     project?: string;
     directory?: string;

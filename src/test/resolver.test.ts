@@ -226,8 +226,8 @@ suite('resolveCommands', () => {
         assert.strictEqual(out[0].type, 'auto');
         assert.strictEqual(out[0].autoRunIntervalMinutes, 5);
         assert.strictEqual(out[0].autoRunIntervalMaxMinutes, 5);
-        assert.strictEqual(out[1].autoRunIntervalMinutes, 15);
-        assert.strictEqual(out[1].autoRunIntervalMaxMinutes, 15);
+        assert.strictEqual(out[1].autoRunIntervalMinutes, 15.7);
+        assert.strictEqual(out[1].autoRunIntervalMaxMinutes, 15.7);
         assert.strictEqual(out[2].autoRunIntervalMinutes, 5);
         assert.strictEqual(out[2].autoRunIntervalMaxMinutes, 5);
     });
@@ -247,5 +247,21 @@ suite('resolveCommands', () => {
         assert.strictEqual(out[1].autoRunIntervalMaxMinutes, 3);
         assert.strictEqual(out[2].autoRunIntervalMinutes, 5);
         assert.strictEqual(out[2].autoRunIntervalMaxMinutes, 5);
+    });
+
+    test('supports fractional (sub-minute) intervals', () => {
+        const out = resolveCommands(
+            [
+                makeCmd({ name: 'half', type: 'auto', autoRunIntervalMinutes: 0.5 }),
+                makeCmd({ name: 'tiny', type: 'auto', autoRunIntervalMinutes: 0.05 }),
+                makeCmd({ name: 'fractionRange', type: 'auto', autoRunIntervalMinutes: [0.5, 1.5] }),
+            ],
+            opts(),
+        );
+        assert.strictEqual(out[0].autoRunIntervalMinutes, 0.5);
+        assert.strictEqual(out[0].autoRunIntervalMaxMinutes, 0.5);
+        assert.strictEqual(out[1].autoRunIntervalMinutes, 5, 'below the 0.1 minimum falls back to the default');
+        assert.strictEqual(out[2].autoRunIntervalMinutes, 0.5);
+        assert.strictEqual(out[2].autoRunIntervalMaxMinutes, 1.5);
     });
 });

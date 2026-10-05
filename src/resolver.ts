@@ -165,6 +165,10 @@ export function normalizeColor(value: string | undefined): string | undefined {
 /** Default number of minutes between auto runs when none is configured. */
 export const DEFAULT_AUTO_RUN_INTERVAL_MINUTES = 5;
 
+/** Lowest accepted interval, in minutes (six seconds); anything shorter would
+ *  let a bad configuration spin the scheduler into a hot loop. */
+export const MINIMUM_AUTO_RUN_INTERVAL_MINUTES = 0.1;
+
 /** Validated auto-run schedule: a fixed interval when both values match,
  *  otherwise a random delay picked between them on every run. */
 export interface AutoRunInterval {
@@ -173,22 +177,31 @@ export interface AutoRunInterval {
 }
 
 // Validate the configured auto-run interval: a single number is a fixed
-// interval, a [min, max] pair is a random range (whole minutes, at least one,
-// order-insensitive). Anything unusable falls back to the default fixed
-// interval, so a bad setting can never spin the scheduler into a hot loop.
+// interval, a [min, max] pair is a random range (order-insensitive).
+// Fractional minutes are allowed so sub-minute cadences are expressible
+// (0.5 = every 30 seconds); values are rounded to two decimals so float noise
+// from hand-edited JSON cannot leak through. Anything unusable falls back to
+// the default fixed interval.
 export function normalizeAutoRunInterval(value: unknown): AutoRunInterval {
     const defaultInterval: AutoRunInterval = {
         minMinutes: DEFAULT_AUTO_RUN_INTERVAL_MINUTES,
         maxMinutes: DEFAULT_AUTO_RUN_INTERVAL_MINUTES,
     };
+    const toMinutes = (input: unknown): number => Math.round(Number(input) * 100) / 100;
     if (typeof value === 'number') {
-        const minutes = Math.floor(value);
-        return minutes >= 1 ? { minMinutes: minutes, maxMinutes: minutes } : defaultInterval;
+        const minutes = toMinutes(value);
+        return Number.isFinite(minutes) && minutes >= MINIMUM_AUTO_RUN_INTERVAL_MINUTES
+            ? { minMinutes: minutes, maxMinutes: minutes }
+            : defaultInterval;
     }
     if (Array.isArray(value) && value.length === 2) {
-        const first = Math.floor(Number(value[0]));
-        const second = Math.floor(Number(value[1]));
-        if (Number.isFinite(first) && Number.isFinite(second) && first >= 1 && second >= 1) {
+        const first = toMinutes(value[0]);
+        const second = toMinutes(value[1]);
+        if (
+            Number.isFinite(first) && Number.isFinite(second) &&
+            first >= MINIMUM_AUTO_RUN_INTERVAL_MINUTES &&
+            second >= MINIMUM_AUTO_RUN_INTERVAL_MINUTES
+        ) {
             return { minMinutes: Math.min(first, second), maxMinutes: Math.max(first, second) };
         }
     }
