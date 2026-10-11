@@ -8,6 +8,7 @@
 //   terminal; matching is enabled across description and detail.
 
 import * as vscode from 'vscode';
+import { resolveRecentCommands } from '../recent';
 import { ResolvedCommand } from '../resolver';
 import { runInCurrentTerminal, runInNewTerminal } from '../terminal';
 
@@ -103,8 +104,7 @@ function buildItems(commands: ResolvedCommand[], recentNames: string[]): Command
 
     // Recent group: resolve names to commands, preserving recency order.
     if (recentNames.length > 0) {
-        const byName = new Map(commands.map((c) => [c.name, c]));
-        const recentCmds = recentNames.map((n) => byName.get(n)).filter((c): c is ResolvedCommand => c !== undefined);
+        const recentCmds = resolveRecentCommands(commands, recentNames);
         if (recentCmds.length > 0) {
             items.push({ label: 'Recent', kind: vscode.QuickPickItemKind.Separator });
             for (const c of recentCmds) {
@@ -139,10 +139,14 @@ function buildItems(commands: ResolvedCommand[], recentNames: string[]): Command
 }
 
 function makeItem(c: ResolvedCommand): CommandItem {
+    // VS Code-command entries carry no shell command; their describe text
+    // (finalShellCommand) stands in so the row is never blank. Shell entries
+    // keep the bare command (no cd prefix) for readability.
+    const detail = c.command || c.finalShellCommand;
     return {
         label: `$(zap) ${c.name}`,
         description: c.description || undefined,
-        detail: truncate(c.command, 240),
+        detail: truncate(detail, 240),
         cmd: c,
         buttons: [RUN_CURRENT, RUN_NEW],
     };

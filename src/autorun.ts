@@ -132,6 +132,19 @@ export class AutoRunEngine {
         for (const timer of this.retryTimers) { clearTimeout(timer); }
         this.retryTimers.clear();
         this.nextRunAtMilliseconds.clear();
+
+        // Drop engine-side state for commands that no longer exist (renames,
+        // deletions), mirroring the tree's result pruning: a stale popup
+        // baseline must not suppress the next notification, and a re-added
+        // command runs immediately again like any other first sighting.
+        const currentNames = new Set(this.options.getCommands().map((c) => c.name));
+        for (const name of [...this.knownCommands]) {
+            if (!currentNames.has(name)) { this.knownCommands.delete(name); }
+        }
+        for (const name of [...this.lastPopupStates.keys()]) {
+            if (!currentNames.has(name)) { this.lastPopupStates.delete(name); }
+        }
+
         for (const command of this.options.getCommands()) {
             if (command.enabled === false) { continue; }
             if (typeof command.autoRunIntervalMinutes !== 'number') { continue; }

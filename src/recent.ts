@@ -3,8 +3,10 @@
 //   persists across VS Code sessions.
 // - getRecentNames() returns the list (most-recent first).
 // - recordRecentName() prepends a name and caps the list at MAX_RECENT.
+// - resolveRecentCommands() maps stored names onto the given resolved commands.
 
 import * as vscode from 'vscode';
+import { ResolvedCommand } from './resolver';
 
 const STATE_KEY = 'powerGlove.recentCommands';
 const MAX_RECENT = 10;
@@ -20,4 +22,17 @@ export function recordRecentName(context: vscode.ExtensionContext, name: string)
     const list = context.globalState.get<string[]>(STATE_KEY, []).filter((n) => n !== name);
     list.unshift(name);
     context.globalState.update(STATE_KEY, list.slice(0, MAX_RECENT));
+}
+
+// Maps stored recent names onto `commands` (typically the current machine's
+// resolved, enabled manual commands), preserving most-recent-first order and
+// skipping names that no longer resolve on this machine.
+export function resolveRecentCommands(
+    commands: ResolvedCommand[],
+    recentNames: string[],
+): ResolvedCommand[] {
+    const byName = new Map(commands.map((c) => [c.name, c]));
+    return recentNames
+        .map((name) => byName.get(name))
+        .filter((cmd): cmd is ResolvedCommand => cmd !== undefined);
 }

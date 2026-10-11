@@ -20,7 +20,7 @@ const DEFAULT_FILENAME = 'power-glove-commands.json';
 // ── Path resolution ───────────────────────────────────────────────────
 
 /** Build the default path: <globalStorageUri>/power-glove-commands.json */
-export function getDefaultCommandsFilePath(context: vscode.ExtensionContext): string {
+function getDefaultCommandsFilePath(context: vscode.ExtensionContext): string {
     return vscode.Uri.joinPath(context.globalStorageUri, DEFAULT_FILENAME).fsPath;
 }
 

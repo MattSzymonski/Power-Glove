@@ -3,6 +3,11 @@
 out/**
 node_modules/**
 src/**
+# Dev/agent tooling folders: not part of the shipped extension
+.agents/**
+.claude/**
+.construction_site/**
+.github/**
 .gitignore
 .yarnrc
 esbuild.js

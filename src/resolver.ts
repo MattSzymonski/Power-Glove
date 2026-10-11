@@ -69,97 +69,8 @@ export function resolveCommands(
     const out: ResolvedCommand[] = [];
 
     for (const cmd of commands) {
-        // Defensive: skip malformed entries (e.g. missing name/command) and log them.
-        if (!isValid(cmd)) {
-            opts.logger?.(`Skipping invalid command entry: ${JSON.stringify(cmd)}`);
-            continue;
-        }
-
-        // Machine visibility gate: must be listed for this host and not hidden.
-        const setting = findMachineSetting(cmd.machineSettings, opts.machineName);
-        if (!setting || setting.show === false) {
-            opts.logger?.(`Skipping ${cmd.name}: not enabled for machine "${opts.machineName}"`);
-            continue;
-        }
-
-        // Project filter: when set, at least one open folder path must contain it.
-        const project = (cmd.project ?? '').trim();
-        if (project && !opts.workspacePaths.some((p) => p.includes(project))) {
-            opts.logger?.(`Skipping ${cmd.name}: project "${project}" matches no open workspace folder`);
-            continue;
-        }
-
-        // Apply this machine's overrides to both the command and the cd directory.
-        const overrides = setting.overrides ?? [];
-
-        // Validate the optional color chip once. Only hex values survive, so
-        // the tree can embed the value into an SVG icon without escaping.
-        const color = normalizeColor(cmd.color);
-
-        // Trigger mode and auto-run schedule. Anything that is not explicitly
-        // 'auto' stays manual; the interval is only meaningful for auto runs.
-        const type: CommandType = cmd.type === 'auto' ? 'auto' : 'manual';
-        const autoInterval = type === 'auto'
-            ? normalizeAutoRunInterval(cmd.autoRunIntervalMinutes)
-            : undefined;
-
-        // Auto-run behaviour knobs: validated here so the engine and the UI
-        // can trust them without re-checking. The interval/popup/timeout/
-        // retry settings are only meaningful for auto commands.
-        const popupPolicy = type === 'auto' ? normalizePopupPolicy(cmd.popup) : undefined;
-        const timeoutSeconds = type === 'auto' ? normalizeTimeoutSeconds(cmd.timeoutSeconds) : undefined;
-        const retryOnFailure = type === 'auto' && cmd.retryOnFailure === true ? true : undefined;
-        const enabled = cmd.enabled !== false;
-
-        // A VS Code-command entry never reaches a terminal, so it has neither a
-        // cd prefix nor a shell line. Overrides still apply, to its string
-        // arguments only, so a per-machine value (an address, a path) is
-        // substituted exactly as it is inside a shell command.
-        const vscodeCommand = (cmd.vscodeCommand ?? '').trim();
-        if (vscodeCommand) {
-            const args = (cmd.vscodeCommandArgs ?? []).map((arg) =>
-                substituteOverrides(arg, overrides, cmd.name, opts.logger),
-            );
-            out.push({
-                name: cmd.name,
-                description: (cmd.description ?? '').trim(),
-                color,
-                type,
-                autoRunIntervalMinutes: autoInterval?.minMinutes,
-                autoRunIntervalMaxMinutes: autoInterval?.maxMinutes,
-                popupPolicy,
-                timeoutSeconds,
-                retryOnFailure,
-                enabled,
-                project,
-                directory: '',
-                command: '',
-                finalShellCommand: describeVscodeCommand(vscodeCommand, args),
-                vscodeCommand,
-                vscodeCommandArgs: args,
-            });
-            continue;
-        }
-
-        const command = applyOverrides(cmd.command ?? '', overrides, cmd.name, opts.logger);
-        const directory = applyOverrides(cmd.directory ?? '', overrides, cmd.name, opts.logger);
-
-        out.push({
-            name: cmd.name,
-            description: (cmd.description ?? '').trim(),
-            color,
-            type,
-            autoRunIntervalMinutes: autoInterval?.minMinutes,
-            autoRunIntervalMaxMinutes: autoInterval?.maxMinutes,
-            popupPolicy,
-            timeoutSeconds,
-            retryOnFailure,
-            enabled,
-            project,
-            directory,
-            command,
-            finalShellCommand: buildShellCommand(command, directory, opts.isWindows),
-        });
+        const resolved = resolveOne(cmd, opts);
+        if (resolved) { out.push(resolved); }
     }
 
     // Report the outcome, so a partial or empty list is self-explanatory in the
@@ -167,6 +78,99 @@ export function resolveCommands(
     opts.logger?.(`loaded ${out.length} of ${commands.length} commands for machine "${opts.machineName}"`);
 
     return out;
+}
+
+// Resolve one raw entry into a runnable command, or undefined when the entry
+// is dropped. Drop reasons are logged so a partial list stays traceable:
+// shape validation (missing name/command), the machine gate (no matching
+// machineSettings entry, or show: false), and the project gate (substring
+// matches no open workspace folder). Survivors get this machine's overrides
+// applied and a platform-correct cd prefix; unresolved <KEY> placeholders
+// are logged and left in place.
+function resolveOne(cmd: CommandConfig, opts: ResolverOptions): ResolvedCommand | undefined {
+    // Defensive: skip malformed entries (e.g. missing name/command) and log them.
+    if (!isValid(cmd)) {
+        opts.logger?.(`Skipping invalid command entry: ${JSON.stringify(cmd)}`);
+        return undefined;
+    }
+
+    // Machine visibility gate: must be listed for this host and not hidden.
+    const setting = findMachineSetting(cmd.machineSettings, opts.machineName);
+    if (!setting || setting.show === false) {
+        opts.logger?.(`Skipping ${cmd.name}: not enabled for machine "${opts.machineName}"`);
+        return undefined;
+    }
+
+    // Project filter: when set, at least one open folder path must contain it.
+    const project = (cmd.project ?? '').trim();
+    if (project && !opts.workspacePaths.some((p) => p.includes(project))) {
+        opts.logger?.(`Skipping ${cmd.name}: project "${project}" matches no open workspace folder`);
+        return undefined;
+    }
+
+    // Apply this machine's overrides to the command, directory and arguments.
+    const overrides = setting.overrides ?? [];
+
+    // Validate the optional color chip once. Only hex values survive, so
+    // the tree can embed the value into an SVG icon without escaping.
+    const color = normalizeColor(cmd.color);
+
+    // Trigger mode and auto-run schedule. Anything that is not explicitly
+    // 'auto' stays manual; the interval is only meaningful for auto runs.
+    const type: CommandType = cmd.type === 'auto' ? 'auto' : 'manual';
+    const autoInterval = type === 'auto'
+        ? normalizeAutoRunInterval(cmd.autoRunIntervalMinutes)
+        : undefined;
+
+    // Auto-run behaviour knobs: validated here so the engine and the UI
+    // can trust them without re-checking. The interval/popup/timeout/
+    // retry settings are only meaningful for auto commands.
+    const popupPolicy = type === 'auto' ? normalizePopupPolicy(cmd.popup) : undefined;
+    const timeoutSeconds = type === 'auto' ? normalizeTimeoutSeconds(cmd.timeoutSeconds) : undefined;
+    const retryOnFailure = type === 'auto' && cmd.retryOnFailure === true ? true : undefined;
+    const enabled = cmd.enabled !== false;
+
+    const base = {
+        name: cmd.name,
+        description: (cmd.description ?? '').trim(),
+        color,
+        type,
+        autoRunIntervalMinutes: autoInterval?.minMinutes,
+        autoRunIntervalMaxMinutes: autoInterval?.maxMinutes,
+        popupPolicy,
+        timeoutSeconds,
+        retryOnFailure,
+        enabled,
+        project,
+    };
+
+    // A VS Code-command entry never reaches a terminal, so it has neither a
+    // cd prefix nor a shell line. Overrides still apply, to its string
+    // arguments only, so a per-machine value (an address, a path) is
+    // substituted exactly as it is inside a shell command.
+    const vscodeCommand = (cmd.vscodeCommand ?? '').trim();
+    if (vscodeCommand) {
+        const args = (cmd.vscodeCommandArgs ?? []).map((arg) =>
+            substituteOverrides(arg, overrides, cmd.name, opts.logger),
+        );
+        return {
+            ...base,
+            directory: '',
+            command: '',
+            finalShellCommand: describeVscodeCommand(vscodeCommand, args),
+            vscodeCommand,
+            vscodeCommandArgs: args,
+        };
+    }
+
+    const command = applyOverrides(cmd.command ?? '', overrides, cmd.name, opts.logger);
+    const directory = applyOverrides(cmd.directory ?? '', overrides, cmd.name, opts.logger);
+    return {
+        ...base,
+        directory,
+        command,
+        finalShellCommand: buildShellCommand(command, directory, opts.isWindows),
+    };
 }
 
 // Minimal shape check used to filter out garbage from user settings. An entry
@@ -182,7 +186,7 @@ function isValid(cmd: CommandConfig): boolean {
 // Validate an optional user-provided color. Only 3- or 6-digit hex values are
 // accepted, normalized to lowercase; anything else resolves to undefined so a
 // malformed entry degrades to "no chip" instead of leaking into an SVG icon.
-export function normalizeColor(value: string | undefined): string | undefined {
+function normalizeColor(value: string | undefined): string | undefined {
     const color = (value ?? '').trim().toLowerCase();
     return /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/.test(color) ? color : undefined;
 }
@@ -196,6 +200,10 @@ export const MINIMUM_AUTO_RUN_INTERVAL_MINUTES = 0.1;
 
 /** Default kill timer for one background run, in seconds. */
 export const DEFAULT_TIMEOUT_SECONDS = 120;
+
+/** Bounds accepted by normalizeTimeoutSeconds: whole seconds, 1 to 3600. */
+export const MINIMUM_TIMEOUT_SECONDS = 1;
+export const MAXIMUM_TIMEOUT_SECONDS = 3600;
 
 /** Notification policy used when an auto command has no valid `popup` value. */
 export const DEFAULT_POPUP_POLICY: PopupPolicy = 'onChange';
@@ -250,7 +258,7 @@ export function normalizePopupPolicy(value: unknown): PopupPolicy {
 // at most one hour (3600); anything else falls back to the default.
 export function normalizeTimeoutSeconds(value: unknown): number {
     const seconds = Math.round(Number(value));
-    return Number.isFinite(seconds) && seconds >= 1 && seconds <= 3600
+    return Number.isFinite(seconds) && seconds >= MINIMUM_TIMEOUT_SECONDS && seconds <= MAXIMUM_TIMEOUT_SECONDS
         ? seconds
         : DEFAULT_TIMEOUT_SECONDS;
 }

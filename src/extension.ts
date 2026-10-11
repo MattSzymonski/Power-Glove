@@ -17,24 +17,34 @@
 //   rebuild the auto-run schedule without an extension reload.
 // - Owns the shared OutputChannel used for diagnostic logging.
 
-import * as path from 'path';
-import * as vscode from 'vscode';
+import * as path from "path";
+import * as vscode from "vscode";
 import {
+	createFile,
+	fileExists,
+	getCommandsFilePath,
 	initializeCommandsStorage,
 	readCommands,
 	saveCommands,
-	fileExists,
-	createFile,
-	getCommandsFilePath,
-} from './config';
-import { detectMachineName } from './machine';
-import { resolveCommands, ResolvedCommand } from './resolver';
-import { isWindowsPlatform, runInCurrentTerminal, runInNewTerminal } from './terminal';
-import { AutoRunEngine, AutoRunResult } from './autorun';
-import { showCommandPicker } from './ui/picker';
-import { openCommandsManager } from './ui/manager';
-import { CommandsTreeDataProvider } from './ui/tree';
-import { getRecentNames, recordRecentName } from './recent';
+} from "./config";
+import { detectMachineName } from "./machine";
+import { resolveCommands, ResolvedCommand } from "./resolver";
+import {
+	isWindowsPlatform,
+	runInCurrentTerminal,
+	runInNewTerminal,
+} from "./terminal";
+import { AutoRunEngine, AutoRunResult } from "./autorun";
+import { showCommandPicker } from "./ui/picker";
+import { openCommandsManager } from "./ui/manager";
+import { openColorPicker } from "./ui/colorPicker";
+import { openEmojiPicker } from "./ui/emojiPicker";
+import { CommandsTreeDataProvider } from "./ui/tree";
+import {
+	getRecentNames,
+	recordRecentName,
+	resolveRecentCommands,
+} from "./recent";
 
 // Module-scoped output channel; created in activate(), used by log() and reportError().
 let output: vscode.OutputChannel;
@@ -46,7 +56,7 @@ let output: vscode.OutputChannel;
 // - Registers all user-facing commands and ties their disposables to the
 //   extension context so they're cleaned up on deactivate.
 export function activate(context: vscode.ExtensionContext): void {
-	output = vscode.window.createOutputChannel('Power Glove');
+	output = vscode.window.createOutputChannel("Power Glove");
 
 	// ── Commands file initialisation ──────────────────────────────────
 	initializeCommandsStorage(context);
@@ -55,16 +65,16 @@ export function activate(context: vscode.ExtensionContext): void {
 	// file is missing on disk. Returns true when the file exists (either
 	// already or just created by the user), false when the user declines.
 	async function ensureCommandsFileExists(): Promise<boolean> {
-		if (fileExists()) { return true; }
+		if (fileExists()) return true;
 
 		const commandsPath = getCommandsFilePath();
 		log(`commands file not found at ${commandsPath}`);
 		const choice = await vscode.window.showWarningMessage(
-			'Power Glove commands file not found. Do you want to create it?',
-			'Create',
-			'Ignore',
+			"Power Glove commands file not found. Do you want to create it?",
+			"Create",
+			"Ignore",
 		);
-		if (choice === 'Create') {
+		if (choice === "Create") {
 			await createFile();
 			log(`created commands file at ${commandsPath}`);
 			vscode.window.showInformationMessage(
@@ -73,7 +83,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			refreshTrees();
 			return true;
 		}
-		log('user chose to ignore missing commands file');
+		log("user chose to ignore missing commands file");
 		return false;
 	}
 
@@ -86,17 +96,20 @@ export function activate(context: vscode.ExtensionContext): void {
 	// only runs once tooltips render, long after activation has finished.
 	let autoEngine!: AutoRunEngine;
 	const treeProvider = new CommandsTreeDataProvider({
-		getNextRunAtMilliseconds: (name) => autoEngine.getNextRunAtMilliseconds(name),
+		getNextRunAtMilliseconds: (name) =>
+			autoEngine.getNextRunAtMilliseconds(name),
 	});
-	const treeView = vscode.window.createTreeView('powerGlove.commands', {
+	const treeView = vscode.window.createTreeView("powerGlove.commands", {
 		treeDataProvider: treeProvider,
 		showCollapseAll: true,
 	});
 
 	// Last auto-run verdicts, persisted per command so a window reload shows
 	// the previous status instead of resetting every dot to "unknown".
-	const AUTO_RUN_RESULTS_KEY = 'powerGlove.autoRunResults';
-	const storedAutoResults = context.globalState.get<Record<string, AutoRunResult>>(
+	const AUTO_RUN_RESULTS_KEY = "powerGlove.autoRunResults";
+	const storedAutoResults = context.globalState.get<
+		Record<string, AutoRunResult>
+	>(
 		AUTO_RUN_RESULTS_KEY,
 		{},
 	);
@@ -107,13 +120,19 @@ export function activate(context: vscode.ExtensionContext): void {
 	// Background runner for 'auto' commands; its callbacks refresh the
 	// status rows inside the Auto Run section and persist each verdict.
 	autoEngine = new AutoRunEngine({
-		getCommands: () => getResolvedCommands().resolved.filter((c) => c.type === 'auto' && c.enabled),
+		getCommands: () =>
+			getResolvedCommands().resolved.filter((c) =>
+				c.type === "auto" && c.enabled
+			),
 		logger: log,
 		onRunStarted: (name) => treeProvider.setRunning(name, true),
 		onRunFinished: (name, result) => {
 			treeProvider.setResult(name, result);
 			storedAutoResults[name] = result;
-			void context.globalState.update(AUTO_RUN_RESULTS_KEY, storedAutoResults);
+			void context.globalState.update(
+				AUTO_RUN_RESULTS_KEY,
+				storedAutoResults,
+			);
 		},
 	});
 
@@ -125,8 +144,8 @@ export function activate(context: vscode.ExtensionContext): void {
 		// answerable from the output channel rather than by reading the code.
 		log(`commands file: ${getCommandsFilePath()}`);
 		const { resolved, machineName } = getResolvedCommands();
-		const manualCommands = resolved.filter((c) => c.type === 'manual');
-		const autoCommands = resolved.filter((c) => c.type === 'auto');
+		const manualCommands = resolved.filter((c) => c.type === "manual");
+		const autoCommands = resolved.filter((c) => c.type === "auto");
 		treeProvider.refresh(manualCommands, autoCommands);
 
 		// Drop persisted results whose command no longer exists in the file
@@ -142,12 +161,16 @@ export function activate(context: vscode.ExtensionContext): void {
 			}
 		}
 		if (prunedStoredResults) {
-			void context.globalState.update(AUTO_RUN_RESULTS_KEY, storedAutoResults);
+			void context.globalState.update(
+				AUTO_RUN_RESULTS_KEY,
+				storedAutoResults,
+			);
 		}
 		treeView.description = machineName;
-		treeView.message = manualCommands.length === 0 && autoCommands.length === 0
-			? 'No commands available for this machine. Use "Power Glove: Manage Commands (UI)" to add some.'
-			: undefined;
+		treeView.message =
+			manualCommands.length === 0 && autoCommands.length === 0
+				? 'No commands available for this machine. Use "Power Glove: Manage Commands (UI)" to add some.'
+				: undefined;
 		autoEngine.resync();
 	};
 
@@ -159,12 +182,15 @@ export function activate(context: vscode.ExtensionContext): void {
 	const watchCommandsFile = () => {
 		commandsFileWatcher?.dispose();
 		const filePath = getCommandsFilePath();
-		if (!filePath) { return; }
+		if (!filePath) return;
 		commandsFileWatcher = vscode.workspace.createFileSystemWatcher(
-			new vscode.RelativePattern(vscode.Uri.file(path.dirname(filePath)), path.basename(filePath)),
+			new vscode.RelativePattern(
+				vscode.Uri.file(path.dirname(filePath)),
+				path.basename(filePath),
+			),
 		);
 		const scheduleRefresh = () => {
-			if (fileChangeDebounce) { clearTimeout(fileChangeDebounce); }
+			if (fileChangeDebounce) clearTimeout(fileChangeDebounce);
 			fileChangeDebounce = setTimeout(() => refreshTrees(), 400);
 		};
 		commandsFileWatcher.onDidChange(scheduleRefresh);
@@ -176,12 +202,12 @@ export function activate(context: vscode.ExtensionContext): void {
 	// visible so the tooltip "next run" countdown stays roughly accurate.
 	// Row re-renders are cheap, and nothing runs while the view is hidden.
 	const countdownTicker = setInterval(() => {
-		if (treeView.visible) { treeProvider.refreshAutoRows(); }
+		if (treeView.visible) treeProvider.refreshAutoRows();
 	}, 15_000);
 
 	context.subscriptions.push(
 		vscode.workspace.onDidChangeConfiguration((e) => {
-			if (e.affectsConfiguration('powerGlove.commandsFilePath')) {
+			if (e.affectsConfiguration("powerGlove.commandsFilePath")) {
 				// Re-resolve the path when the user changes it in settings.
 				initializeCommandsStorage(context);
 				watchCommandsFile();
@@ -190,7 +216,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		}),
 		vscode.workspace.onDidChangeWorkspaceFolders(() => refreshTrees()),
 		new vscode.Disposable(() => {
-			if (fileChangeDebounce) { clearTimeout(fileChangeDebounce); }
+			if (fileChangeDebounce) clearTimeout(fileChangeDebounce);
 			clearInterval(countdownTicker);
 			commandsFileWatcher?.dispose();
 			autoEngine.dispose();
@@ -201,103 +227,166 @@ export function activate(context: vscode.ExtensionContext): void {
 	// Rewrites one entry in the commands file ("enabled": false disables it
 	// everywhere without deleting it). The file watcher would pick the save
 	// up on its own, but refreshTrees() makes the row flip immediately.
-	const setCommandEnabled = async (arg: unknown, enabled: boolean): Promise<void> => {
-		const name = typeof arg === 'string'
-			? arg
-			: (arg as Record<string, unknown> | undefined)?.id as string | undefined;
-		if (!name) { return; }
+	const setCommandEnabled = async (
+		arg: unknown,
+		enabled: boolean,
+	): Promise<void> => {
+		const name = commandNameFromArg(arg);
+		if (!name) return;
 		const commands = readCommands();
 		const entry = commands.find((c) => c.name === name);
-		if (!entry) { return; }
+		if (!entry) return;
 		if (enabled) {
 			delete entry.enabled;
 		} else {
 			entry.enabled = false;
 		}
 		await saveCommands(commands);
-		log(`${enabled ? 'enabled' : 'disabled'} command: ${name}`);
+		log(`${enabled ? "enabled" : "disabled"} command: ${name}`);
 		refreshTrees();
 	};
 
 	// ── Inline action commands for tree items ─────────────────────────
 	context.subscriptions.push(
-		vscode.commands.registerCommand('powerGlove.tree.disableCommand', (arg: unknown) =>
-			setCommandEnabled(arg, false),
+		vscode.commands.registerCommand(
+			"powerGlove.tree.disableCommand",
+			(arg: unknown) => setCommandEnabled(arg, false),
 		),
-		vscode.commands.registerCommand('powerGlove.tree.enableCommand', (arg: unknown) =>
-			setCommandEnabled(arg, true),
+		vscode.commands.registerCommand(
+			"powerGlove.tree.enableCommand",
+			(arg: unknown) => setCommandEnabled(arg, true),
 		),
-		vscode.commands.registerCommand('powerGlove.tree.runCurrent', (arg: string) => {
-			const name = typeof arg === 'string' ? arg : (arg as Record<string, unknown>)?.id as string | undefined;
-			if (!name) { return; }
-			const cmd = treeProvider.getResolvedCommand(name);
-			if (cmd) {
-				recordRecentName(context, cmd.name);
-				runInCurrentTerminal(cmd);
-			}
-		}),
-		vscode.commands.registerCommand('powerGlove.tree.runNew', (arg: string) => {
-			const name = typeof arg === 'string' ? arg : (arg as Record<string, unknown>)?.id as string | undefined;
-			if (!name) { return; }
-			const cmd = treeProvider.getResolvedCommand(name);
-			if (cmd) {
-				recordRecentName(context, cmd.name);
-				runInNewTerminal(cmd);
-			}
-		}),
-		vscode.commands.registerCommand('powerGlove.tree.showInfo', (arg: string) => {
-			const name = typeof arg === 'string' ? arg : (arg as Record<string, unknown>)?.id as string | undefined;
-			if (!name) { return; }
-			const cmd = treeProvider.getResolvedCommand(name);
-			if (cmd) {
-				showCommandDetails(cmd);
-			}
-		}),
+		vscode.commands.registerCommand(
+			"powerGlove.tree.runCurrent",
+			(arg: unknown) => {
+				const name = commandNameFromArg(arg);
+				if (!name) return;
+				const cmd = treeProvider.getResolvedCommand(name);
+				if (cmd) {
+					recordRecentName(context, cmd.name);
+					runInCurrentTerminal(cmd);
+				}
+			},
+		),
+		vscode.commands.registerCommand(
+			"powerGlove.tree.runNew",
+			(arg: unknown) => {
+				const name = commandNameFromArg(arg);
+				if (!name) return;
+				const cmd = treeProvider.getResolvedCommand(name);
+				if (cmd) {
+					recordRecentName(context, cmd.name);
+					runInNewTerminal(cmd);
+				}
+			},
+		),
+		vscode.commands.registerCommand(
+			"powerGlove.tree.showInfo",
+			(arg: unknown) => {
+				const name = commandNameFromArg(arg);
+				if (!name) return;
+				const cmd = treeProvider.getResolvedCommand(name);
+				if (cmd) {
+					showCommandDetails(cmd);
+				}
+			},
+		),
 	);
 
 	// ── User-facing commands ──────────────────────────────────────────
 	context.subscriptions.push(
 		output,
 		treeView,
-
-		vscode.commands.registerCommand('powerGlove.refreshTree', () => refreshTrees()),
-		vscode.commands.registerCommand('powerGlove.openUI', () => openUI(context)),
-		vscode.commands.registerCommand('powerGlove.openManager', async () => {
+		vscode.commands.registerCommand(
+			"powerGlove.refreshTree",
+			() => refreshTrees(),
+		),
+		vscode.commands.registerCommand(
+			"powerGlove.openUI",
+			() => openUI(context),
+		),
+		vscode.commands.registerCommand("powerGlove.openManager", async () => {
 			await ensureCommandsFileExists();
 			openCommandsManager(context);
 		}),
-		vscode.commands.registerCommand('powerGlove.openManagerJson', async () => {
-			if (await ensureCommandsFileExists()) {
-				await openCommandsJsonFile();
-			}
-		}),
-		vscode.commands.registerCommand('powerGlove.runInCurrentTerminal', () =>
-			pickAndRun(context, runInCurrentTerminal),
+		vscode.commands.registerCommand(
+			"powerGlove.openManagerJson",
+			async () => {
+				if (await ensureCommandsFileExists()) {
+					await openCommandsJsonFile();
+				}
+			},
 		),
-		vscode.commands.registerCommand('powerGlove.runInNewTerminal', () =>
-			pickAndRun(context, runInNewTerminal),
+		vscode.commands.registerCommand(
+			"powerGlove.openColorPicker",
+			() => openColorPicker(context),
 		),
-		vscode.commands.registerCommand('powerGlove.runRecent', () => runRecent(context)),
-		vscode.commands.registerCommand('powerGlove.auto.runNow', (arg: string | vscode.TreeItem) => {
-			// Row clicks pass the command name; context-menu invocations pass
-			// the tree element itself (with the command name as its id).
-			const name = typeof arg === 'string' ? arg : arg?.id;
-			if (name) { autoEngine.runCommand(name); }
-		}),
-		vscode.commands.registerCommand('powerGlove.auto.runAll', () => autoEngine.runAll()),
+		vscode.commands.registerCommand(
+			"powerGlove.openEmojiPicker",
+			() => openEmojiPicker(context),
+		),
+		vscode.commands.registerCommand(
+			"powerGlove.runInCurrentTerminal",
+			() => pickAndRun(context, runInCurrentTerminal),
+		),
+		vscode.commands.registerCommand(
+			"powerGlove.runInNewTerminal",
+			() => pickAndRun(context, runInNewTerminal),
+		),
+		vscode.commands.registerCommand(
+			"powerGlove.runRecent",
+			() => runRecent(context),
+		),
+		vscode.commands.registerCommand(
+			"powerGlove.auto.runNow",
+			(arg: unknown) => {
+				const name = commandNameFromArg(arg);
+				if (name) autoEngine.runCommand(name);
+			},
+		),
+		vscode.commands.registerCommand(
+			"powerGlove.auto.runAll",
+			() => autoEngine.runAll(),
+		),
 	);
 
 	// Initial population: build the view and start the auto-run schedule.
 	watchCommandsFile();
 	refreshTrees();
 
-	log('activated');
+	log("activated");
 }
 
 // VS Code lifecycle hook. No explicit cleanup needed; everything is registered
 // through context.subscriptions and disposed automatically.
 export function deactivate(): void {
 	// Disposed via context.subscriptions.
+}
+
+// Resolve the command name carried by a tree-action argument: inline button
+// handlers and row clicks pass the name string; context-menu invocations pass
+// the TreeItem itself (whose id is the command name). Undefined when neither.
+function commandNameFromArg(arg: unknown): string | undefined {
+	if (typeof arg === "string") return arg;
+	const id = (arg as Record<string, unknown> | undefined)?.id;
+	return typeof id === "string" ? id : undefined;
+}
+
+// Build the QuickPick rows for `commands` and show the picker; resolves to
+// the chosen command, or undefined when the person cancels or closes it.
+async function pickFromCommands(
+	commands: ResolvedCommand[],
+	placeHolder: string,
+): Promise<ResolvedCommand | undefined> {
+	const pick = await vscode.window.showQuickPick(
+		commands.map((c) => ({
+			label: c.name,
+			description: c.command,
+			cmd: c,
+		})),
+		{ placeHolder },
+	);
+	return pick?.cmd;
 }
 
 // Handler for `powerGlove.openUI`. Resolves the current command list for this
@@ -308,7 +397,9 @@ function openUI(context: vscode.ExtensionContext): void {
 		const { resolved, machineName } = getResolvedCommands();
 		// The picker only offers enabled manual commands; auto commands live in
 		// their own sidebar section and run on their schedule instead.
-		const manualCommands = resolved.filter((c) => c.type === 'manual' && c.enabled);
+		const manualCommands = resolved.filter((c) =>
+			c.type === "manual" && c.enabled
+		);
 		const recentNames = getRecentNames(context);
 		showCommandPicker(
 			manualCommands,
@@ -339,23 +430,25 @@ async function openCommandsJsonFile(): Promise<void> {
 // - Resolves commands for this machine, shows a minimal QuickPick, and forwards
 //   the chosen entry to the supplied `run` strategy.
 // - Shows an error if no commands match the current machine.
-async function pickAndRun(context: vscode.ExtensionContext, run: (cmd: ResolvedCommand) => void): Promise<void> {
+async function pickAndRun(
+	context: vscode.ExtensionContext,
+	run: (cmd: ResolvedCommand) => void,
+): Promise<void> {
 	try {
 		const { resolved, machineName } = getResolvedCommands();
-		const manualCommands = resolved.filter((c) => c.type === 'manual' && c.enabled);
+		const manualCommands = resolved.filter((c) =>
+			c.type === "manual" && c.enabled
+		);
 		if (manualCommands.length === 0) {
 			vscode.window.showErrorMessage(
 				`Power Glove: no commands available for machine "${machineName}".`,
 			);
 			return;
 		}
-		const pick = await vscode.window.showQuickPick(
-			manualCommands.map((c) => ({ label: c.name, description: c.command, cmd: c })),
-			{ placeHolder: 'Select command' },
-		);
-		if (pick) {
-			recordRecentName(context, pick.cmd.name);
-			run(pick.cmd);
+		const cmd = await pickFromCommands(manualCommands, "Select command");
+		if (cmd) {
+			recordRecentName(context, cmd.name);
+			run(cmd);
 		}
 	} catch (err) {
 		reportError(err);
@@ -370,26 +463,32 @@ async function runRecent(context: vscode.ExtensionContext): Promise<void> {
 	try {
 		const recentNames = getRecentNames(context);
 		if (recentNames.length === 0) {
-			vscode.window.showInformationMessage('Power Glove: no recently run commands yet.');
+			vscode.window.showInformationMessage(
+				"Power Glove: no recently run commands yet.",
+			);
 			return;
 		}
 		const { resolved } = getResolvedCommands();
-		const manualCommands = resolved.filter((c) => c.type === 'manual' && c.enabled);
-		const byName = new Map(manualCommands.map((c) => [c.name, c]));
-		const recentResolved = recentNames
-			.map((n) => byName.get(n))
-			.filter((c): c is ResolvedCommand => c !== undefined);
+		const manualCommands = resolved.filter((c) =>
+			c.type === "manual" && c.enabled
+		);
+		const recentResolved = resolveRecentCommands(
+			manualCommands,
+			recentNames,
+		);
 		if (recentResolved.length === 0) {
-			vscode.window.showInformationMessage('Power Glove: no recent commands available on this machine.');
+			vscode.window.showInformationMessage(
+				"Power Glove: no recent commands available on this machine.",
+			);
 			return;
 		}
-		const pick = await vscode.window.showQuickPick(
-			recentResolved.map((c) => ({ label: c.name, description: c.command, cmd: c })),
-			{ placeHolder: 'Select recent command' },
+		const cmd = await pickFromCommands(
+			recentResolved,
+			"Select recent command",
 		);
-		if (pick) {
-			recordRecentName(context, pick.cmd.name);
-			runInCurrentTerminal(pick.cmd);
+		if (cmd) {
+			recordRecentName(context, cmd.name);
+			runInCurrentTerminal(cmd);
 		}
 	} catch (err) {
 		reportError(err);
@@ -403,7 +502,8 @@ async function runRecent(context: vscode.ExtensionContext): Promise<void> {
 function getResolvedCommands() {
 	const commands = readCommands();
 	const machineName = detectMachineName();
-	const workspacePaths = vscode.workspace.workspaceFolders?.map((f) => f.uri.fsPath) ?? [];
+	const workspacePaths =
+		vscode.workspace.workspaceFolders?.map((f) => f.uri.fsPath) ?? [];
 	const resolved = resolveCommands(commands, {
 		machineName,
 		isWindows: isWindowsPlatform(),
@@ -431,21 +531,38 @@ function reportError(err: unknown): void {
 function showCommandDetails(cmd: ResolvedCommand): void {
 	const qp = vscode.window.createQuickPick<vscode.QuickPickItem>();
 	qp.title = `Command: ${cmd.name}`;
-	qp.placeholder = 'Esc to close  ·  Enter to run in current terminal';
+	qp.placeholder = "Esc to close  ·  Enter to run in current terminal";
 	qp.items = [
-		{ label: '$(info) Description', description: cmd.description || '(none)' },
-		{ label: '$(folder) Project', description: cmd.project || '(general)' },
-		{ label: '$(root-folder) Directory', description: cmd.directory || '(none — runs in terminal CWD)' },
-		{ label: '$(terminal) Shell command', description: cmd.finalShellCommand },
+		{
+			label: "$(info) Description",
+			description: cmd.description || "(none)",
+		},
+		{ label: "$(folder) Project", description: cmd.project || "(general)" },
+		{
+			label: "$(root-folder) Directory",
+			description: cmd.directory || "(none — runs in terminal CWD)",
+		},
+		{
+			label: "$(terminal) Shell command",
+			description: cmd.finalShellCommand,
+		},
 	];
 	qp.buttons = [
-		{ iconPath: new vscode.ThemeIcon('copy'), tooltip: 'Copy shell command' },
-		{ iconPath: new vscode.ThemeIcon('play'), tooltip: 'Run in current terminal' },
+		{
+			iconPath: new vscode.ThemeIcon("copy"),
+			tooltip: "Copy shell command",
+		},
+		{
+			iconPath: new vscode.ThemeIcon("play"),
+			tooltip: "Run in current terminal",
+		},
 	];
 	qp.onDidTriggerButton((btn) => {
-		if (btn.tooltip === 'Copy shell command') {
+		if (btn.tooltip === "Copy shell command") {
 			vscode.env.clipboard.writeText(cmd.finalShellCommand);
-			vscode.window.showInformationMessage('Copied shell command to clipboard.');
+			vscode.window.showInformationMessage(
+				"Copied shell command to clipboard.",
+			);
 			qp.hide();
 		} else {
 			qp.hide();

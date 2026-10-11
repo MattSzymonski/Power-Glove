@@ -1,9 +1,9 @@
 // This file detects the current machine's identity for command filtering.
 // - Exports detectMachineName() which returns a stable identifier used
 //   to match against CommandConfig.machineSettings entries.
-// - Prefers the remote host name when running through a VS Code remote
-//   (SSH_CONNECTION / HOSTNAME / COMPUTERNAME), then falls back to
-//   os.hostname(), then the literal 'unknown'.
+// - On a VS Code remote the order is os.hostname(), then the HOSTNAME /
+//   COMPUTERNAME env vars, then SSH_CONNECTION's server-IP field; locally
+//   os.hostname(), and 'unknown' when even that throws.
 
 import * as vscode from 'vscode';
 import * as os from 'os';
@@ -11,9 +11,9 @@ import * as os from 'os';
 // Returns a stable identifier for the machine the extension is currently
 // running on. Used by the resolver to filter commands and apply per-machine
 // overrides.
-// - When connected via Remote-SSH (or any VS Code remote), prefers the remote
-//   host name from HOSTNAME / COMPUTERNAME env vars, then SSH_CONNECTION's
-//   server-IP field as a last resort.
+// - When connected via a VS Code remote, os.hostname() is tried first (the
+//   kernel-backed hostname), then the HOSTNAME / COMPUTERNAME env vars, then
+//   SSH_CONNECTION's server-IP field as a last resort.
 // - Otherwise falls back to os.hostname(), and finally the literal 'unknown'
 //   if even that throws.
 export function detectMachineName(): string {

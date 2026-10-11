@@ -172,7 +172,7 @@ export class CommandsTreeDataProvider implements vscode.TreeDataProvider<Command
                     vscode.TreeItemCollapsibleState.Expanded,
                 );
                 item.iconPath = new vscode.ThemeIcon('folder');
-                item.description = `${count} command${count !== 1 ? 's' : ''}`;
+                item.description = describeCommandCount(count);
                 item.contextValue = 'group';
                 return item;
             });
@@ -248,7 +248,7 @@ export class CommandsTreeDataProvider implements vscode.TreeDataProvider<Command
         const item = new CommandTreeItem('Auto Run', vscode.TreeItemCollapsibleState.Expanded);
         item.iconPath = new vscode.ThemeIcon('pulse');
         item.description = this.autoCommands.length > 0
-            ? `${this.autoCommands.length} command${this.autoCommands.length !== 1 ? 's' : ''}`
+            ? describeCommandCount(this.autoCommands.length)
             : 'none';
         item.contextValue = 'autoSection';
         return item;
@@ -295,14 +295,11 @@ export class CommandsTreeDataProvider implements vscode.TreeDataProvider<Command
  *  command that will be sent to the terminal. */
 function buildTooltip(cmd: ResolvedCommand): vscode.MarkdownString {
     const md = new vscode.MarkdownString();
-    md.appendMarkdown(`**${escapeMarkdown(cmd.name)}**`);
-    if (cmd.description) {
-        md.appendMarkdown(`\n\n${escapeMarkdown(cmd.description)}`);
-    }
+    appendCommandTooltipHeader(md, cmd.name, cmd.description);
     if (cmd.enabled === false) {
-        md.appendMarkdown('\n\n_DISABLED_ — use "Enable Command" in the context menu to activate it again.');
+        md.appendMarkdown('_DISABLED_ \u2014 use "Enable Command" in the context menu to activate it again.\n\n');
     }
-    md.appendMarkdown(`\n\n---\n\`\`\`shell\n${cmd.finalShellCommand}\n\`\`\``);
+    md.appendMarkdown(`---\n\`\`\`shell\n${cmd.finalShellCommand}\n\`\`\``);
     return md;
 }
 
@@ -310,6 +307,24 @@ function buildTooltip(cmd: ResolvedCommand): vscode.MarkdownString {
  *  accidentally break the tooltip formatting. */
 function escapeMarkdown(text: string): string {
     return text.replace(/[\\`*_{}[\]()#+\-.!|]/g, '\\$&');
+}
+
+/** "1 command" / "N commands" - used by the group and Auto Run headers. */
+function describeCommandCount(count: number): string {
+    return `${count} command${count !== 1 ? 's' : ''}`;
+}
+
+/** Append the "**name**" + description header every command tooltip starts
+ *  with, each part followed by the blank line that separates Markdown blocks. */
+function appendCommandTooltipHeader(
+    markdown: vscode.MarkdownString,
+    name: string,
+    description: string | undefined,
+): void {
+    markdown.appendMarkdown(`**${escapeMarkdown(name)}**\n\n`);
+    if (description) {
+        markdown.appendMarkdown(`${escapeMarkdown(description)}\n\n`);
+    }
 }
 
 /** Build the icon shown at the start of every command row. The full-height
@@ -365,10 +380,7 @@ function buildAutoTooltip(
     nextRunAtMilliseconds?: number,
 ): vscode.MarkdownString {
     const markdown = new vscode.MarkdownString();
-    markdown.appendMarkdown(`**${escapeMarkdown(command.name)}**\n\n`);
-    if (command.description) {
-        markdown.appendMarkdown(`${escapeMarkdown(command.description)}\n\n`);
-    }
+    appendCommandTooltipHeader(markdown, command.name, command.description);
     if (command.enabled === false) {
         markdown.appendMarkdown('Disabled — enable it from the context menu to run it again.\n\n');
     }

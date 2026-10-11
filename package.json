@@ -55,6 +55,14 @@
         "title": "Power Glove: Manage Commands (JSON)"
       },
       {
+        "command": "powerGlove.openColorPicker",
+        "title": "Power Glove: Color Picker"
+      },
+      {
+        "command": "powerGlove.openEmojiPicker",
+        "title": "Power Glove: Emoji Picker"
+      },
+      {
         "command": "powerGlove.runInCurrentTerminal",
         "title": "Power Glove: Run In Current Terminal"
       },

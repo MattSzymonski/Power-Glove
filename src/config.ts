@@ -18,9 +18,6 @@ import {
     createDefaultCommandsFile,
 } from './storage';
 
-// Re-export interfaces for backward compatibility with existing imports.
-export type { Override, MachineSetting, CommandConfig } from './types';
-
 // ── Module-level state ────────────────────────────────────────────────
 
 // The activation context, kept only so the commands file path can be
