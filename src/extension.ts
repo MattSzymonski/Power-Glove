@@ -8,6 +8,11 @@
 // - Owns the single sidebar tree, split into the manual commands section on
 //   top and the Auto Run section at the bottom, plus the background
 //   AutoRunEngine that feeds the auto-run rows.
+// - Persists the last auto-run verdict per command (globalState) so window
+//   reloads show the previous status instead of a blank row, and prunes
+//   entries whose command has disappeared from the file.
+// - Provides the enable/disable context actions and feeds the tree the
+//   next-scheduled-run countdown rendered in its tooltips.
 // - Watches the commands file so manager saves refresh both trees and
 //   rebuild the auto-run schedule without an extension reload.
 // - Owns the shared OutputChannel used for diagnostic logging.
@@ -17,6 +22,7 @@ import * as vscode from 'vscode';
 import {
 	initializeCommandsStorage,
 	readCommands,
+	saveCommands,
 	fileExists,
 	createFile,
 	getCommandsFilePath,
@@ -24,7 +30,7 @@ import {
 import { detectMachineName } from './machine';
 import { resolveCommands, ResolvedCommand } from './resolver';
 import { isWindowsPlatform, runInCurrentTerminal, runInNewTerminal } from './terminal';
-import { AutoRunEngine } from './autorun';
+import { AutoRunEngine, AutoRunResult } from './autorun';
 import { showCommandPicker } from './ui/picker';
 import { openCommandsManager } from './ui/manager';
 import { CommandsTreeDataProvider } from './ui/tree';
@@ -76,19 +82,39 @@ export function activate(context: vscode.ExtensionContext): void {
 	ensureCommandsFileExists();
 
 	// ── Tree view (sidebar) ─────────────────────────────────────────
-	const treeProvider = new CommandsTreeDataProvider();
+	// The engine is constructed a few lines below; the countdown callback
+	// only runs once tooltips render, long after activation has finished.
+	let autoEngine!: AutoRunEngine;
+	const treeProvider = new CommandsTreeDataProvider({
+		getNextRunAtMilliseconds: (name) => autoEngine.getNextRunAtMilliseconds(name),
+	});
 	const treeView = vscode.window.createTreeView('powerGlove.commands', {
 		treeDataProvider: treeProvider,
 		showCollapseAll: true,
 	});
 
+	// Last auto-run verdicts, persisted per command so a window reload shows
+	// the previous status instead of resetting every dot to "unknown".
+	const AUTO_RUN_RESULTS_KEY = 'powerGlove.autoRunResults';
+	const storedAutoResults = context.globalState.get<Record<string, AutoRunResult>>(
+		AUTO_RUN_RESULTS_KEY,
+		{},
+	);
+	for (const [name, result] of Object.entries(storedAutoResults)) {
+		treeProvider.setResult(name, result);
+	}
+
 	// Background runner for 'auto' commands; its callbacks refresh the
-	// status rows inside the Auto Run section of the same tree.
-	const autoEngine = new AutoRunEngine({
-		getCommands: () => getResolvedCommands().resolved.filter((c) => c.type === 'auto'),
+	// status rows inside the Auto Run section and persist each verdict.
+	autoEngine = new AutoRunEngine({
+		getCommands: () => getResolvedCommands().resolved.filter((c) => c.type === 'auto' && c.enabled),
 		logger: log,
 		onRunStarted: (name) => treeProvider.setRunning(name, true),
-		onRunFinished: (name, result) => treeProvider.setResult(name, result),
+		onRunFinished: (name, result) => {
+			treeProvider.setResult(name, result);
+			storedAutoResults[name] = result;
+			void context.globalState.update(AUTO_RUN_RESULTS_KEY, storedAutoResults);
+		},
 	});
 
 	// Refresh the view and rebuild the auto-run schedule. Called on
@@ -102,6 +128,22 @@ export function activate(context: vscode.ExtensionContext): void {
 		const manualCommands = resolved.filter((c) => c.type === 'manual');
 		const autoCommands = resolved.filter((c) => c.type === 'auto');
 		treeProvider.refresh(manualCommands, autoCommands);
+
+		// Drop persisted results whose command no longer exists in the file
+		// (renames and deletions); the raw config is compared instead of the
+		// machine/project-filtered view, so hiding a command on one workspace
+		// never discards the status recorded on another.
+		const configuredNames = new Set(readCommands().map((c) => c.name));
+		let prunedStoredResults = false;
+		for (const name of Object.keys(storedAutoResults)) {
+			if (!configuredNames.has(name)) {
+				delete storedAutoResults[name];
+				prunedStoredResults = true;
+			}
+		}
+		if (prunedStoredResults) {
+			void context.globalState.update(AUTO_RUN_RESULTS_KEY, storedAutoResults);
+		}
 		treeView.description = machineName;
 		treeView.message = manualCommands.length === 0 && autoCommands.length === 0
 			? 'No commands available for this machine. Use "Power Glove: Manage Commands (UI)" to add some.'
@@ -130,6 +172,13 @@ export function activate(context: vscode.ExtensionContext): void {
 		commandsFileWatcher.onDidDelete(scheduleRefresh);
 	};
 
+	// Countdown ticker: refresh the auto rows every 15 s while the view is
+	// visible so the tooltip "next run" countdown stays roughly accurate.
+	// Row re-renders are cheap, and nothing runs while the view is hidden.
+	const countdownTicker = setInterval(() => {
+		if (treeView.visible) { treeProvider.refreshAutoRows(); }
+	}, 15_000);
+
 	context.subscriptions.push(
 		vscode.workspace.onDidChangeConfiguration((e) => {
 			if (e.affectsConfiguration('powerGlove.commandsFilePath')) {
@@ -142,13 +191,42 @@ export function activate(context: vscode.ExtensionContext): void {
 		vscode.workspace.onDidChangeWorkspaceFolders(() => refreshTrees()),
 		new vscode.Disposable(() => {
 			if (fileChangeDebounce) { clearTimeout(fileChangeDebounce); }
+			clearInterval(countdownTicker);
 			commandsFileWatcher?.dispose();
 			autoEngine.dispose();
 		}),
 	);
 
+	// ── Enable / disable toggle ───────────────────────────────────────
+	// Rewrites one entry in the commands file ("enabled": false disables it
+	// everywhere without deleting it). The file watcher would pick the save
+	// up on its own, but refreshTrees() makes the row flip immediately.
+	const setCommandEnabled = async (arg: unknown, enabled: boolean): Promise<void> => {
+		const name = typeof arg === 'string'
+			? arg
+			: (arg as Record<string, unknown> | undefined)?.id as string | undefined;
+		if (!name) { return; }
+		const commands = readCommands();
+		const entry = commands.find((c) => c.name === name);
+		if (!entry) { return; }
+		if (enabled) {
+			delete entry.enabled;
+		} else {
+			entry.enabled = false;
+		}
+		await saveCommands(commands);
+		log(`${enabled ? 'enabled' : 'disabled'} command: ${name}`);
+		refreshTrees();
+	};
+
 	// ── Inline action commands for tree items ─────────────────────────
 	context.subscriptions.push(
+		vscode.commands.registerCommand('powerGlove.tree.disableCommand', (arg: unknown) =>
+			setCommandEnabled(arg, false),
+		),
+		vscode.commands.registerCommand('powerGlove.tree.enableCommand', (arg: unknown) =>
+			setCommandEnabled(arg, true),
+		),
 		vscode.commands.registerCommand('powerGlove.tree.runCurrent', (arg: string) => {
 			const name = typeof arg === 'string' ? arg : (arg as Record<string, unknown>)?.id as string | undefined;
 			if (!name) { return; }
@@ -228,9 +306,9 @@ export function deactivate(): void {
 function openUI(context: vscode.ExtensionContext): void {
 	try {
 		const { resolved, machineName } = getResolvedCommands();
-		// The picker only offers manual commands; auto commands live in their
-		// own sidebar section and run on their schedule instead.
-		const manualCommands = resolved.filter((c) => c.type === 'manual');
+		// The picker only offers enabled manual commands; auto commands live in
+		// their own sidebar section and run on their schedule instead.
+		const manualCommands = resolved.filter((c) => c.type === 'manual' && c.enabled);
 		const recentNames = getRecentNames(context);
 		showCommandPicker(
 			manualCommands,
@@ -264,7 +342,7 @@ async function openCommandsJsonFile(): Promise<void> {
 async function pickAndRun(context: vscode.ExtensionContext, run: (cmd: ResolvedCommand) => void): Promise<void> {
 	try {
 		const { resolved, machineName } = getResolvedCommands();
-		const manualCommands = resolved.filter((c) => c.type === 'manual');
+		const manualCommands = resolved.filter((c) => c.type === 'manual' && c.enabled);
 		if (manualCommands.length === 0) {
 			vscode.window.showErrorMessage(
 				`Power Glove: no commands available for machine "${machineName}".`,
@@ -296,7 +374,7 @@ async function runRecent(context: vscode.ExtensionContext): Promise<void> {
 			return;
 		}
 		const { resolved } = getResolvedCommands();
-		const manualCommands = resolved.filter((c) => c.type === 'manual');
+		const manualCommands = resolved.filter((c) => c.type === 'manual' && c.enabled);
 		const byName = new Map(manualCommands.map((c) => [c.name, c]));
 		const recentResolved = recentNames
 			.map((n) => byName.get(n))

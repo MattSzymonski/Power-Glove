@@ -36,11 +36,13 @@ A webview that lets you edit your Power Glove commands without hand-editing JSON
 
 The **Auto Run** section at the bottom of the Power Glove sidebar lists commands whose **Type** is set to *Auto run command*. They run themselves in the background every N minutes (configurable per command, default 5) and report their result in the sidebar.
 
-- **Row icons** - Every command row starts with the command's color bar (a slim vertical rectangle; a muted placeholder when no color is set), followed by a dark gray divider line. Auto rows then show the status dot: green, yellow, or red; a hollow dot means no valid result yet.
+- **Row icons** - Every command row shows a full-height color bar hugging the right edge (transparent when no color is set). Auto rows put the status dot on the left: green, yellow, or red; a hollow ring means no valid result yet. Disabled commands render with a transparent bar and a "disabled" label.
 - **Row format** - Rows read `[▌│●] name · result message`; the message is clipped by VS Code when space runs out. The command description is available in the row tooltip.
 - **Run now** - Click a row (or press Enter on it) to run that command immediately. The title-bar button reruns all auto commands.
-- **Notifications** - A command can raise a VS Code notification by returning a non-empty popup message.
-- **Scheduling** - Auto commands run while VS Code is open and are rescheduled automatically when the commands file changes.
+- **Disable** - Right-click a row and choose *Disable Command* to switch it off without deleting it; disabled commands stay dimmed in the tree and come back via *Enable Command*.
+- **Notifications** - A command can raise a VS Code notification by returning a non-empty popup message. By default (`"popup": "onChange"`) it only fires when the status or popup message changed since the previous run, so repeating conditions don't notify on every tick; `"always"` and `"never"` are also supported.
+- **Last results survive reloads** - The most recent verdict of every auto command is kept in VS Code's global storage, so the dots show the previous status immediately after a window reload.
+- **Scheduling** - Auto commands run while VS Code is open and are rescheduled automatically when the commands file changes. Row tooltips show a countdown to the next run; per-command `"timeoutSeconds"` overrides the 120 s kill timer, and `"retryOnFailure": true` retries once when a run produces no valid status line.
 
 Auto commands must print **one line** in this format:
 
@@ -48,7 +50,7 @@ Auto commands must print **one line** in this format:
 
 - `COLOR` is required: `red`, `yellow`, or `green` (case-insensitive).
 - `RESULT_MESSAGE` may be empty (nothing is shown in the row); long messages are clipped.
-- `POPUP_MESSAGE` may be empty (no notification); when non-empty it raises an information / warning / error notification for green / yellow / red.
+- `POPUP_MESSAGE` may be empty (no notification); when non-empty it raises an information / warning / error notification for green / yellow / red — subject to the command's popup policy (default: only when it changes between runs).
 
 The parser scans stdout from the bottom up and uses the **last** valid line, so a script may log other output before its status line.
 
@@ -189,6 +191,10 @@ The `power-glove-commands.json` file contains a JSON array of command objects:
 | `color`                         | string                  | Optional hex color (`#rgb` or `#rrggbb`) shown as a filled square before the command in the sidebar tree.                                                   |
 | `type`                          | string                  | `manual` (default) or `auto`. Auto commands run in the background and report in the Auto Run sidebar section.                                               |
 | `autoRunIntervalMinutes`        | number or `[min, max]`  | Minutes between background runs of an `auto` command; default 5. Decimals are allowed (`0.5` = 30 s), minimum 0.1. A pair like `[1, 3]` schedules each run after a random delay in that range. |
+| `popup`                         | string                  | `onChange` (default), `always`, or `never`: when a non-empty `POPUP_MESSAGE` raises a notification. `onChange` notifies only when the status or popup message differs from the previous run. |
+| `timeoutSeconds`                | number                  | Kill a background run after this many seconds (default 120, minimum 1, maximum 3600).                                                                        |
+| `retryOnFailure`                | boolean                 | `true` retries an auto run once (after 3 s) when it errors or prints no valid status line.                                                                    |
+| `enabled`                       | boolean                 | `false` disables the command: hidden from the picker, no background runs, still visible (dimmed) in the sidebar tree. Defaults to `true`.                     |
 | `project`                       | string                  | If non-empty, command is shown only when at least one open workspace folder path **contains** this substring. Empty = always shown.                         |
 | `directory`                     | string                  | If non-empty, command is prefixed with `cd /d "<dir>" && …` (Windows) or `cd "<dir>" && …` (POSIX). May contain `<KEY>` tokens.                             |
 | `command`                       | string                  | Shell command line. May contain `<KEY>` tokens.                                                                                                             |

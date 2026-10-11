@@ -3,9 +3,11 @@
 //   accepted colors and case handling, empty message fields, whitespace
 //   trimming, last-line-wins when scripts log noise before their status
 //   line, and rejection when no line matches.
+// - Verifies shouldShowPopup(): the 'always' / 'onChange' / 'never' popup
+//   policies and their change detection.
 
 import * as assert from 'assert';
-import { parseAutoRunOutput } from '../autorun';
+import { parseAutoRunOutput, shouldShowPopup } from '../autorun';
 
 suite('parseAutoRunOutput', () => {
     test('parses a full red status line', () => {
@@ -50,5 +52,40 @@ suite('parseAutoRunOutput', () => {
         assert.strictEqual(parseAutoRunOutput(''), undefined);
         assert.strictEqual(parseAutoRunOutput('all good!\nstatus: GREEN'), undefined);
         assert.strictEqual(parseAutoRunOutput('blu|not a status|'), undefined);
+    });
+});
+
+suite('shouldShowPopup', () => {
+    const current = { status: 'yellow' as const, popupMessage: 'Costs higher' };
+
+    test('never shows an empty popup message', () => {
+        assert.strictEqual(shouldShowPopup('always', undefined, { status: 'red', popupMessage: '' }), false);
+        assert.strictEqual(shouldShowPopup('onChange', undefined, { status: 'red', popupMessage: '' }), false);
+    });
+
+    test('never policy suppresses every notification', () => {
+        assert.strictEqual(shouldShowPopup('never', undefined, current), false);
+        assert.strictEqual(
+            shouldShowPopup('never', { status: 'green', popupMessage: 'other' }, current),
+            false,
+        );
+    });
+
+    test('always policy notifies on every run with a popup message', () => {
+        assert.strictEqual(shouldShowPopup('always', current, current), true);
+        assert.strictEqual(shouldShowPopup('always', undefined, current), true);
+    });
+
+    test('onChange notifies on the first result and on any change', () => {
+        assert.strictEqual(shouldShowPopup('onChange', undefined, current), true);
+
+        const identical = { status: 'yellow' as const, popupMessage: 'Costs higher' };
+        assert.strictEqual(shouldShowPopup('onChange', identical, current), false, 'identical verdict stays quiet');
+
+        const statusChanged = { status: 'red' as const, popupMessage: 'Costs higher' };
+        assert.strictEqual(shouldShowPopup('onChange', statusChanged, current), true, 'status change notifies');
+
+        const messageChanged = { status: 'yellow' as const, popupMessage: 'Costs much higher' };
+        assert.strictEqual(shouldShowPopup('onChange', messageChanged, current), true, 'message change notifies');
     });
 });

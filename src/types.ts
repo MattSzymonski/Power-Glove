@@ -15,6 +15,10 @@ export interface MachineSetting {
 /** How a command is triggered: from the UI, or automatically in background. */
 export type CommandType = 'manual' | 'auto';
 
+/** When an auto command's popup message raises a VS Code notification:
+ *  on every run, only when status/message changed (default), or never. */
+export type PopupPolicy = 'always' | 'onChange' | 'never';
+
 export interface CommandConfig {
     name: string;
     description?: string;
@@ -29,6 +33,18 @@ export interface CommandConfig {
      *  A [min, max] pair schedules each next run after a random delay in
      *  that range instead of a fixed interval. */
     autoRunIntervalMinutes?: number | [number, number];
+    /** Popup policy for auto commands (default 'onChange'). 'onChange'
+     *  notifies only when the status or popup message differs from the
+     *  previous run, so a repeating condition does not notify every tick. */
+    popup?: PopupPolicy;
+    /** Kill a background run after this many seconds (default 120, max 3600). */
+    timeoutSeconds?: number;
+    /** Retry once when a background run errors or prints no status line. */
+    retryOnFailure?: boolean;
+    /** Set to false to disable the command without deleting it: it disappears
+     *  from the picker and stops auto running, but stays visible in the
+     *  sidebar tree (dimmed) and editable in the Commands Manager. */
+    enabled?: boolean;
     project?: string;
     directory?: string;
     /** Shell command typed into a terminal. Absent when `vscodeCommand` is set. */

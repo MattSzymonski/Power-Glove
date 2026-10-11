@@ -17,6 +17,11 @@
 //     row click / Enter -> run in current terminal
 //     ▣ run in new terminal (inline button)
 //     ⓘ show command details (inline button)
+// - Disabled commands ("enabled": false) stay visible but render dimmed:
+//   no run action, a "disabled" description, and a "…disabled" context value
+//   so the context menu offers Enable instead of Disable.
+// - Auto row tooltips show a countdown to the next scheduled run via the
+//   getNextRunAtMilliseconds callback supplied by the extension.
 // - setRunning()/setResult() feed the Auto Run rows from the background
 //   engine; refresh() replaces both sections' data in one go.
 
@@ -50,6 +55,14 @@ export class CommandTreeItem extends vscode.TreeItem {
     }
 }
 
+// Hooks the provider uses to enrich auto rows; optional so tests can
+// construct the provider without any extension wiring.
+export interface CommandsTreeProviderOptions {
+    /** Epoch ms of the next scheduled run for an auto command, or undefined
+     *  when it is not scheduled; rendered as a countdown in the tooltip. */
+    getNextRunAtMilliseconds?: (name: string) => number | undefined;
+}
+
 // TreeDataProvider that powers the "Power Glove Commands" view in the
 // Explorer sidebar. Groups are derived from the `project` field of each
 // resolved command; commands with no project land under "(general)".
@@ -57,6 +70,8 @@ export class CommandsTreeDataProvider implements vscode.TreeDataProvider<Command
 
     private _onDidChangeTreeData = new vscode.EventEmitter<CommandTreeItem | undefined | void>();
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
+
+    constructor(private readonly options: CommandsTreeProviderOptions = {}) {}
 
     // Current snapshot of resolved commands, kept up-to-date via refresh().
     private resolvedCommands: ResolvedCommand[] = [];
@@ -129,6 +144,13 @@ export class CommandsTreeDataProvider implements vscode.TreeDataProvider<Command
         this._onDidChangeTreeData.fire();
     }
 
+    /** Re-render the Auto Run rows; used by the periodic countdown ticker so
+     *  the tooltip's "next run" line stays fresh. No-op without auto rows. */
+    refreshAutoRows(): void {
+        if (this.autoCommands.length === 0) { return; }
+        this._onDidChangeTreeData.fire();
+    }
+
     // ---------------------------------------------------------------------------
     // TreeDataProvider implementation
     // ---------------------------------------------------------------------------
@@ -183,6 +205,7 @@ export class CommandsTreeDataProvider implements vscode.TreeDataProvider<Command
             );
 
             return commands.map((cmd) => {
+                const disabled = cmd.enabled === false;
                 const item = new CommandTreeItem(
                     cmd.name,
                     vscode.TreeItemCollapsibleState.None,
@@ -190,19 +213,20 @@ export class CommandsTreeDataProvider implements vscode.TreeDataProvider<Command
                     group,              // informational only
                 );
                 // Same icon grammar as the auto rows, without the status dot:
-                // the color bar on the right is transparent when unset.
-                item.iconPath = buildRowIcon(cmd.color, undefined);
-                item.description = cmd.description || undefined;
+                // the color bar on the right is transparent when unset (and
+                // always transparent while the command is disabled).
+                item.iconPath = buildRowIcon(disabled ? undefined : cmd.color, undefined);
+                item.description = disabled ? 'disabled' : (cmd.description || undefined);
                 item.tooltip = buildTooltip(cmd);
-                item.contextValue = 'command';
+                item.contextValue = disabled ? 'command.disabled' : 'command';
                 // id is the stable key used by inline-action handlers to
                 // recover the ResolvedCommand from the provider's map.
                 item.id = cmd.name;
 
                 // Default action: clicking anywhere on the command row (or
-                // pressing Enter) runs it in the current terminal. This is why
-                // there is no dedicated run-current inline button anymore.
-                item.command = {
+                // pressing Enter) runs it in the current terminal. Disabled
+                // rows have no action; the context menu is the way back.
+                item.command = disabled ? undefined : {
                     command: 'powerGlove.tree.runCurrent',
                     title: 'Run in Current Terminal',
                     arguments: [cmd.name],
@@ -232,6 +256,7 @@ export class CommandsTreeDataProvider implements vscode.TreeDataProvider<Command
 
     // Build one Auto Run row: status dot, name, description + last message.
     private buildAutoItem(command: ResolvedCommand): CommandTreeItem {
+        const disabled = command.enabled === false;
         const result = this.autoResults.get(command.name);
         const running = this.runningAutoNames.has(command.name);
 
@@ -241,12 +266,19 @@ export class CommandsTreeDataProvider implements vscode.TreeDataProvider<Command
             command.name,   // informational; the row runs via explicit args
         );
         item.id = command.name;
-        item.contextValue = 'autoCommand';
-        item.iconPath = buildRowIcon(command.color, result?.status ?? 'unknown');
-        item.description = buildAutoDescription(result, running);
-        item.tooltip = buildAutoTooltip(command, result, running);
+        item.contextValue = disabled ? 'autoCommand.disabled' : 'autoCommand';
+        item.iconPath = buildRowIcon(
+            disabled ? undefined : command.color,
+            disabled ? undefined : (result?.status ?? 'unknown'),
+        );
+        item.description = disabled ? 'disabled' : buildAutoDescription(result, running);
+        item.tooltip = buildAutoTooltip(
+            command, result, running,
+            this.options.getNextRunAtMilliseconds?.(command.name),
+        );
         // Row click / Enter runs the command now instead of opening details.
-        item.command = {
+        // Disabled rows have no action; the context menu is the way back.
+        item.command = disabled ? undefined : {
             command: 'powerGlove.auto.runNow',
             title: 'Run Now',
             arguments: [command.name],
@@ -266,6 +298,9 @@ function buildTooltip(cmd: ResolvedCommand): vscode.MarkdownString {
     md.appendMarkdown(`**${escapeMarkdown(cmd.name)}**`);
     if (cmd.description) {
         md.appendMarkdown(`\n\n${escapeMarkdown(cmd.description)}`);
+    }
+    if (cmd.enabled === false) {
+        md.appendMarkdown('\n\n_DISABLED_ — use "Enable Command" in the context menu to activate it again.');
     }
     md.appendMarkdown(`\n\n---\n\`\`\`shell\n${cmd.finalShellCommand}\n\`\`\``);
     return md;
@@ -320,21 +355,29 @@ function buildAutoDescription(
     return result?.message || undefined;
 }
 
-// Build the hover tooltip for an auto row: interval, last verdict and its
-// messages, plus the resolved shell command for troubleshooting.
+// Build the hover tooltip for an auto row: interval, next scheduled run,
+// last verdict and its messages, plus the resolved shell command for
+// troubleshooting.
 function buildAutoTooltip(
     command: ResolvedCommand,
     result: AutoRunResult | undefined,
     running: boolean,
+    nextRunAtMilliseconds?: number,
 ): vscode.MarkdownString {
     const markdown = new vscode.MarkdownString();
     markdown.appendMarkdown(`**${escapeMarkdown(command.name)}**\n\n`);
     if (command.description) {
         markdown.appendMarkdown(`${escapeMarkdown(command.description)}\n\n`);
     }
+    if (command.enabled === false) {
+        markdown.appendMarkdown('Disabled — enable it from the context menu to run it again.\n\n');
+    }
     markdown.appendMarkdown(
         `Runs every ${formatIntervalLabel(command.autoRunIntervalMinutes, command.autoRunIntervalMaxMinutes)}.\n\n`,
     );
+    if (!running && command.enabled !== false && nextRunAtMilliseconds !== undefined) {
+        markdown.appendMarkdown(`Next run: ${formatNextRun(nextRunAtMilliseconds)}\n\n`);
+    }
     if (running) {
         markdown.appendMarkdown('Status: running…\n\n');
     } else if (result) {
@@ -367,4 +410,16 @@ function formatIntervalLabel(
         return `${asText(minimumMinutes)}-${asText(maximumMinutes)} (random)`;
     }
     return asText(minimumMinutes);
+}
+
+// Render the next scheduled run for the tooltip: local time plus a coarse
+// countdown. The seconds part is rounded to 5 s and the extension only
+// re-renders rows every ~15 s, so treat the "~" as an order of magnitude.
+function formatNextRun(nextRunAtMilliseconds: number): string {
+    const remainingSeconds = Math.max(0, Math.round((nextRunAtMilliseconds - Date.now()) / 1000));
+    const time = new Date(nextRunAtMilliseconds).toLocaleTimeString();
+    if (remainingSeconds >= 90) {
+        return `${time} (~${Math.round(remainingSeconds / 60)} min)`;
+    }
+    return `${time} (~${Math.max(5, Math.round(remainingSeconds / 5) * 5)} s)`;
 }

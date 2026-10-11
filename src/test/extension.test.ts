@@ -18,6 +18,8 @@ const EXPECTED_COMMANDS = [
 	'powerGlove.runInNewTerminal',
 	'powerGlove.auto.runNow',
 	'powerGlove.auto.runAll',
+	'powerGlove.tree.disableCommand',
+	'powerGlove.tree.enableCommand',
 ];
 
 suite('Power Glove · activation', () => {

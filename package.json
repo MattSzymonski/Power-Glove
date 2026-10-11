@@ -95,6 +95,16 @@
         "command": "powerGlove.auto.runAll",
         "title": "Power Glove: Run All Auto Commands Now",
         "icon": "$(run-all)"
+      },
+      {
+        "command": "powerGlove.tree.disableCommand",
+        "title": "Disable Command",
+        "icon": "$(circle-slash)"
+      },
+      {
+        "command": "powerGlove.tree.enableCommand",
+        "title": "Enable Command",
+        "icon": "$(check)"
       }
     ],
     "configuration": {
@@ -140,6 +150,16 @@
           "command": "powerGlove.auto.runNow",
           "when": "view == powerGlove.commands && viewItem == autoCommand",
           "group": "1_run@1"
+        },
+        {
+          "command": "powerGlove.tree.disableCommand",
+          "when": "view == powerGlove.commands && (viewItem == command || viewItem == autoCommand)",
+          "group": "2_manage@1"
+        },
+        {
+          "command": "powerGlove.tree.enableCommand",
+          "when": "view == powerGlove.commands && (viewItem == command.disabled || viewItem == autoCommand.disabled)",
+          "group": "2_manage@1"
         }
       ],
       "commandPalette": [
@@ -157,6 +177,14 @@
         },
         {
           "command": "powerGlove.auto.runNow",
+          "when": "false"
+        },
+        {
+          "command": "powerGlove.tree.disableCommand",
+          "when": "false"
+        },
+        {
+          "command": "powerGlove.tree.enableCommand",
           "when": "false"
         }
       ]

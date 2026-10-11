@@ -3,8 +3,9 @@
 //   top and the "Auto Run" section pinned to the bottom.
 // - Covers the auto hint row (no auto commands), status-row content after a
 //   result is recorded, row icon composition (color bar, status dot /
-//   placeholder), result pruning on refresh, and the hidden-section
-//   case when the whole view is empty.
+//   placeholder), disabled-row rendering, the next-run tooltip countdown,
+//   result pruning on refresh, and the hidden-section case when the whole
+//   view is empty.
 
 import * as assert from 'assert';
 import * as vscode from 'vscode';
@@ -15,7 +16,7 @@ function manualCommand(name: string, project = ''): ResolvedCommand {
     return {
         name, description: `${name} description`, project,
         directory: '', command: 'echo hi', finalShellCommand: 'echo hi',
-        type: 'manual',
+        type: 'manual', enabled: true,
     };
 }
 
@@ -23,7 +24,7 @@ function autoCommand(name: string, intervalMinutes = 5): ResolvedCommand {
     return {
         name, description: `${name} description`, project: '',
         directory: '', command: 'echo auto', finalShellCommand: 'echo auto',
-        type: 'auto', autoRunIntervalMinutes: intervalMinutes,
+        type: 'auto', autoRunIntervalMinutes: intervalMinutes, enabled: true,
     };
 }
 
@@ -131,5 +132,37 @@ suite('CommandsTreeDataProvider sections', () => {
         const svg = decodeIcon(provider.getChildren(group)[0]);
         assert.ok(svg.includes('#8b949e'), 'placeholder gray is drawn');
         assert.ok(svg.includes('fill-opacity="0.0"'), 'placeholder bar is transparent');
+    });
+
+    test('disabled commands render dimmed without a run action', () => {
+        const provider = new CommandsTreeDataProvider();
+        provider.refresh(
+            [{ ...manualCommand('Old'), enabled: false }],
+            [{ ...autoCommand('Check'), enabled: false }],
+        );
+
+        const [group, autoSection] = provider.getChildren();
+        const manualRow = provider.getChildren(group)[0];
+        assert.strictEqual(manualRow.description, 'disabled');
+        assert.strictEqual(manualRow.contextValue, 'command.disabled');
+        assert.strictEqual(manualRow.command, undefined, 'disabled manual rows cannot run');
+
+        const autoRow = provider.getChildren(autoSection)[0];
+        assert.strictEqual(autoRow.description, 'disabled');
+        assert.strictEqual(autoRow.contextValue, 'autoCommand.disabled');
+        assert.strictEqual(autoRow.command, undefined, 'disabled auto rows cannot run');
+    });
+
+    test('auto tooltips show the next scheduled run countdown', () => {
+        const provider = new CommandsTreeDataProvider({
+            getNextRunAtMilliseconds: () => Date.now() + 30_000,
+        });
+        provider.refresh([], [autoCommand('Peak')]);
+
+        const [autoSection] = provider.getChildren();
+        const row = provider.getChildren(autoSection)[0];
+        const tooltip = (row.tooltip as vscode.MarkdownString).value;
+        assert.ok(tooltip.includes('Next run:'), 'tooltip shows the next-run line');
+        assert.ok(tooltip.includes('(~30 s)'), `countdown reads about 30 s: ${tooltip}`);
     });
 });

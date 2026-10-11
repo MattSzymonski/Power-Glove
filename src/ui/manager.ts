@@ -133,6 +133,10 @@ function normalize(c: CommandConfig): CommandConfig {
 	if (typeof interval === 'number' || Array.isArray(interval)) {
 		normalized.autoRunIntervalMinutes = interval;
 	}
+	if (c?.popup === 'always' || c?.popup === 'never') { normalized.popup = c.popup; }
+	if (typeof c?.timeoutSeconds === 'number') { normalized.timeoutSeconds = c.timeoutSeconds; }
+	if (c?.retryOnFailure === true) { normalized.retryOnFailure = true; }
+	if (c?.enabled === false) { normalized.enabled = false; }
 	normalized.project = c?.project ?? '';
 	normalized.directory = c?.directory ?? '';
 	normalized.command = c?.command ?? '';
@@ -427,6 +431,10 @@ function renderHtml(): string {
 		<li><b>Name</b> — a short, human-readable label for the command (shown in the picker and tree view).</li>
 		<li><b>Type</b> — <i>Manual run command</i> appears in the picker and the top sidebar section. <i>Auto run command</i> runs itself in the background and reports in the bottom "Auto Run" section.</li>
 		<li><b>Auto run interval</b> — minutes between background runs of an auto command (minimum 0.1; default 5). Decimals are allowed (<code>0.5</code> runs every 30 seconds), and a range like <code>1-3</code> schedules each run after a random delay in that range.</li>
+		<li><b>Popup notifications</b> — when an auto command's <code>POPUP_MESSAGE</code> raises a notification: only when the status or message changed (default), on every run, or never.</li>
+		<li><b>Auto run timeout</b> — seconds before a background run is killed (default 120, maximum 3600).</li>
+		<li><b>Retry once</b> — re-runs the command once (after 3 s) when a background run produces no valid status line.</li>
+		<li><b>Enabled</b> — uncheck to disable a command without deleting it: it disappears from the picker and stops auto running, but stays visible (dimmed) in the sidebar tree and can be re-enabled from its context menu.</li>
 		<li><b>Description</b> — optional extra detail displayed alongside the command name in the picker.</li>
 		<li><b>Color</b> — optional square shown before the command in the sidebar tree. Pick a preset or type any <code>#rgb</code> / <code>#rrggbb</code> value.</li>
 		<li><b>Project filter</b> — restricts the command to workspaces whose folder path contains this text. Leave empty to make the command available in all projects.</li>
@@ -439,7 +447,7 @@ function renderHtml(): string {
 	<ul>
 		<li><code>COLOR</code> is required: <code>red</code>, <code>yellow</code>, or <code>green</code> — it colors the dot in the Auto Run tree.</li>
 		<li><code>RESULT_MESSAGE</code> is shown next to the command in the Auto Run tree (empty = nothing shown).</li>
-		<li><code>POPUP_MESSAGE</code>, when non-empty, raises a notification (green: info, yellow: warning, red: error).</li>
+		<li><code>POPUP_MESSAGE</code>, when non-empty and allowed by the <i>Popup notifications</i> policy, raises a notification (green: info, yellow: warning, red: error); with the default policy it only fires when it changes between runs.</li>
 	</ul>
 	<h3>Tips</h3>
 	<ul>
@@ -465,8 +473,12 @@ function renderHtml(): string {
 			</div>
 		</div>
 		<div class="card-body">
+			<div class="field"><label class="toggle"><input type="checkbox" data-bind="enabled" /> Enabled — uncheck to disable without deleting (hidden from the picker, dimmed in the tree)</label></div>
 			<div class="field"><label>Type</label><select data-bind="type"><option value="manual">Manual run command</option><option value="auto">Auto run command</option></select></div>
 			<div class="field auto-interval-field" style="display:none"><label>Auto run interval (minutes — 0.5 = 30 s — or a random range like 1-3)</label><input type="text" data-bind="autoRunIntervalMinutes" placeholder="e.g. 5, 0.5 or 1-3" spellcheck="false" /></div>
+			<div class="field auto-popup-field" style="display:none"><label>Popup notifications</label><select data-bind="popup"><option value="onChange">Only when status or message changed (default)</option><option value="always">On every run with a popup message</option><option value="never">Never notify</option></select></div>
+			<div class="field auto-timeout-field" style="display:none"><label>Auto run timeout — seconds before a background run is killed (default 120)</label><input type="text" data-bind="timeoutSeconds" placeholder="e.g. 120" spellcheck="false" /></div>
+			<div class="field auto-retry-field" style="display:none"><label class="toggle"><input type="checkbox" data-bind="retryOnFailure" /> Retry once if a run fails or prints no status line</label></div>
 			<div class="field"><label>Name</label><input type="text" data-bind="name" /></div>
 			<div class="field"><label>Description — optional help text shown in the command picker</label><input type="text" data-bind="description" /></div>
 			<div class="field"><label>Color — square shown before the command in the sidebar tree</label><div class="color-row"><span class="swatches"></span><input type="text" class="color-hex" maxlength="7" placeholder="#RRGGBB" spellcheck="false" /></div></div>
@@ -777,9 +789,9 @@ function renderHtml(): string {
 		hexInput.addEventListener('blur', () => { hexInput.value = normalizeHex(c.color); });
 		renderColor();
 
-		// Command type + auto-run interval: the dropdown switches between the
-		// manual (default) and auto modes. The interval field and the "auto"
-		// chip on the card head are only shown for auto commands.
+		// Command type + auto-run settings: the dropdown switches between the
+		// manual (default) and auto modes. The interval, popup, timeout and
+		// retry fields and the "auto" chip are only shown for auto commands.
 		const typeSelect = node.querySelector('[data-bind="type"]');
 		const typeChip = node.querySelector('.type-chip');
 		const intervalField = node.querySelector('.auto-interval-field');
@@ -814,6 +826,9 @@ function renderHtml(): string {
 			const isAuto = typeSelect.value === 'auto';
 			typeChip.style.display = isAuto ? '' : 'none';
 			intervalField.style.display = isAuto ? '' : 'none';
+			popupField.style.display = isAuto ? '' : 'none';
+			timeoutField.style.display = isAuto ? '' : 'none';
+			retryField.style.display = isAuto ? '' : 'none';
 		};
 		// Entries without a type are manual; showing that explicitly in the
 		// dropdown keeps older commands files working without rewriting them.
@@ -849,6 +864,67 @@ function renderHtml(): string {
 			intervalInput.value = formatInterval(c.autoRunIntervalMinutes);
 			save();
 		});
+
+		// Popup policy: only meaningful for auto commands; 'onChange' is the
+		// default, so picking it deletes the key instead of storing it.
+		const popupField = node.querySelector('.auto-popup-field');
+		const popupSelect = node.querySelector('[data-bind="popup"]');
+		popupSelect.value = c.popup === 'always' || c.popup === 'never' ? c.popup : 'onChange';
+		popupSelect.addEventListener('change', () => {
+			if (popupSelect.value === 'always' || popupSelect.value === 'never') {
+				c.popup = popupSelect.value;
+			} else {
+				delete c.popup;
+			}
+			save();
+		});
+
+		// Timeout overrides the default 120 s kill timer; empty or invalid
+		// input removes the key on blur so the default applies again.
+		const timeoutField = node.querySelector('.auto-timeout-field');
+		const timeoutInput = node.querySelector('[data-bind="timeoutSeconds"]');
+		const parseTimeout = () => {
+			const seconds = Math.round(Number(timeoutInput.value.trim()));
+			return Number.isFinite(seconds) && seconds >= 1 && seconds <= 3600 ? seconds : null;
+		};
+		const formatTimeout = () => typeof c.timeoutSeconds === 'number' ? String(c.timeoutSeconds) : '';
+		timeoutInput.value = formatTimeout();
+		timeoutInput.addEventListener('input', () => {
+			const parsed = parseTimeout();
+			if (parsed !== null) { c.timeoutSeconds = parsed; debouncedSave(); }
+		});
+		timeoutInput.addEventListener('blur', () => {
+			const parsed = parseTimeout();
+			if (parsed !== null) { c.timeoutSeconds = parsed; } else { delete c.timeoutSeconds; }
+			timeoutInput.value = formatTimeout();
+			save();
+		});
+
+		// Retry-on-failure toggle.
+		const retryField = node.querySelector('.auto-retry-field');
+		const retryInput = node.querySelector('[data-bind="retryOnFailure"]');
+		retryInput.checked = c.retryOnFailure === true;
+		retryInput.addEventListener('change', () => {
+			if (retryInput.checked) { c.retryOnFailure = true; } else { delete c.retryOnFailure; }
+			save();
+		});
+
+		// Enabled toggle: unchecking stores "enabled": false, checking removes
+		// the key again (missing means enabled) so the file stays clean. The
+		// card dims like a machine-hidden entry to signal the inactive state.
+		const enabledInput = node.querySelector('[data-bind="enabled"]');
+		enabledInput.checked = c.enabled !== false;
+		enabledInput.addEventListener('change', () => {
+			if (enabledInput.checked) {
+				delete c.enabled;
+				node.classList.remove('dim');
+			} else {
+				c.enabled = false;
+				node.classList.add('dim');
+			}
+			save();
+		});
+
 		applyTypeUi();
 
 		// Project value dropdown: lists all distinct project values in state.

@@ -2,8 +2,9 @@
 // - Exercises machine show/hide filtering, project-substring matching,
 //   <KEY> override substitution (incl. repeated and missing placeholders),
 //   Windows vs POSIX shell building, description handling, color
-//   validation, command type and auto-run interval resolution,
-//   invalid-input skipping, and ordering guarantees.
+//   validation, command type and auto-run settings (interval, popup policy,
+//   timeout, retry, enabled) resolution, invalid-input skipping, and
+//   ordering guarantees.
 // - Has no vscode interaction; runs as plain Mocha inside the extension
 //   host alongside the activation tests.
 
@@ -263,5 +264,58 @@ suite('resolveCommands', () => {
         assert.strictEqual(out[1].autoRunIntervalMinutes, 5, 'below the 0.1 minimum falls back to the default');
         assert.strictEqual(out[2].autoRunIntervalMinutes, 0.5);
         assert.strictEqual(out[2].autoRunIntervalMaxMinutes, 1.5);
+    });
+
+    test('normalizes the popup policy of auto commands', () => {
+        const out = resolveCommands(
+            [
+                makeCmd({ name: 'default', type: 'auto' }),
+                makeCmd({ name: 'always', type: 'auto', popup: 'always' }),
+                makeCmd({ name: 'never', type: 'auto', popup: 'never' }),
+                makeCmd({ name: 'garbage', type: 'auto', popup: 'sometimes' as never }),
+                makeCmd({ name: 'manual', popup: 'always' }),
+            ],
+            opts(),
+        );
+        assert.strictEqual(out[0].popupPolicy, 'onChange');
+        assert.strictEqual(out[1].popupPolicy, 'always');
+        assert.strictEqual(out[2].popupPolicy, 'never');
+        assert.strictEqual(out[3].popupPolicy, 'onChange', 'unknown values fall back to the default');
+        assert.strictEqual(out[4].popupPolicy, undefined, 'popup policy is auto-only');
+    });
+
+    test('normalizes timeoutSeconds and retryOnFailure for auto commands', () => {
+        const out = resolveCommands(
+            [
+                makeCmd({ name: 'default', type: 'auto' }),
+                makeCmd({ name: 'custom', type: 'auto', timeoutSeconds: 45, retryOnFailure: true }),
+                makeCmd({ name: 'tooSmall', type: 'auto', timeoutSeconds: 0 }),
+                makeCmd({ name: 'tooBig', type: 'auto', timeoutSeconds: 99999 }),
+                makeCmd({ name: 'manual', timeoutSeconds: 30, retryOnFailure: true }),
+            ],
+            opts(),
+        );
+        assert.strictEqual(out[0].timeoutSeconds, 120);
+        assert.strictEqual(out[1].timeoutSeconds, 45);
+        assert.strictEqual(out[1].retryOnFailure, true);
+        assert.strictEqual(out[2].timeoutSeconds, 120, 'out-of-range timeouts fall back to the default');
+        assert.strictEqual(out[3].timeoutSeconds, 120, 'out-of-range timeouts fall back to the default');
+        assert.strictEqual(out[4].timeoutSeconds, undefined, 'timeout is auto-only');
+        assert.strictEqual(out[4].retryOnFailure, undefined, 'retry is auto-only');
+    });
+
+    test('resolves disabled commands but marks them disabled', () => {
+        const out = resolveCommands(
+            [
+                makeCmd({ name: 'off', enabled: false }),
+                makeCmd({ name: 'on', enabled: true }),
+                makeCmd({ name: 'legacy' }),
+            ],
+            opts(),
+        );
+        assert.strictEqual(out.length, 3, 'disabled entries stay resolved for the UI');
+        assert.strictEqual(out[0].enabled, false);
+        assert.strictEqual(out[1].enabled, true);
+        assert.strictEqual(out[2].enabled, true, 'missing enabled means enabled');
     });
 });

@@ -8,7 +8,7 @@
 // - Builds the final shell string with a platform-correct cd prefix.
 // - Has no `vscode` dependency, which makes it directly unit-testable.
 
-import { CommandConfig, CommandType, MachineSetting, Override } from './types';
+import { CommandConfig, CommandType, MachineSetting, Override, PopupPolicy } from './types';
 
 export interface ResolvedCommand {
     name: string;
@@ -24,6 +24,15 @@ export interface ResolvedCommand {
     /** Upper bound of the background run interval. A value above the minimum
      *  means the next run is scheduled after a random delay in the range. */
     autoRunIntervalMaxMinutes?: number;
+    /** Popup policy for background runs; only set for 'auto' commands. */
+    popupPolicy?: PopupPolicy;
+    /** Kill the background run after this many seconds; only set for 'auto'. */
+    timeoutSeconds?: number;
+    /** Retry once after errors or unparseable output; only set for 'auto'. */
+    retryOnFailure?: boolean;
+    /** False when the entry has "enabled": false. Disabled commands are still
+     *  resolved so the UI can show them, but they must never be run. */
+    enabled: boolean;
     project: string;
     directory: string;
     command: string;
@@ -94,6 +103,14 @@ export function resolveCommands(
             ? normalizeAutoRunInterval(cmd.autoRunIntervalMinutes)
             : undefined;
 
+        // Auto-run behaviour knobs: validated here so the engine and the UI
+        // can trust them without re-checking. The interval/popup/timeout/
+        // retry settings are only meaningful for auto commands.
+        const popupPolicy = type === 'auto' ? normalizePopupPolicy(cmd.popup) : undefined;
+        const timeoutSeconds = type === 'auto' ? normalizeTimeoutSeconds(cmd.timeoutSeconds) : undefined;
+        const retryOnFailure = type === 'auto' && cmd.retryOnFailure === true ? true : undefined;
+        const enabled = cmd.enabled !== false;
+
         // A VS Code-command entry never reaches a terminal, so it has neither a
         // cd prefix nor a shell line. Overrides still apply, to its string
         // arguments only, so a per-machine value (an address, a path) is
@@ -110,6 +127,10 @@ export function resolveCommands(
                 type,
                 autoRunIntervalMinutes: autoInterval?.minMinutes,
                 autoRunIntervalMaxMinutes: autoInterval?.maxMinutes,
+                popupPolicy,
+                timeoutSeconds,
+                retryOnFailure,
+                enabled,
                 project,
                 directory: '',
                 command: '',
@@ -130,6 +151,10 @@ export function resolveCommands(
             type,
             autoRunIntervalMinutes: autoInterval?.minMinutes,
             autoRunIntervalMaxMinutes: autoInterval?.maxMinutes,
+            popupPolicy,
+            timeoutSeconds,
+            retryOnFailure,
+            enabled,
             project,
             directory,
             command,
@@ -169,6 +194,12 @@ export const DEFAULT_AUTO_RUN_INTERVAL_MINUTES = 5;
  *  let a bad configuration spin the scheduler into a hot loop. */
 export const MINIMUM_AUTO_RUN_INTERVAL_MINUTES = 0.1;
 
+/** Default kill timer for one background run, in seconds. */
+export const DEFAULT_TIMEOUT_SECONDS = 120;
+
+/** Notification policy used when an auto command has no valid `popup` value. */
+export const DEFAULT_POPUP_POLICY: PopupPolicy = 'onChange';
+
 /** Validated auto-run schedule: a fixed interval when both values match,
  *  otherwise a random delay picked between them on every run. */
 export interface AutoRunInterval {
@@ -206,6 +237,22 @@ export function normalizeAutoRunInterval(value: unknown): AutoRunInterval {
         }
     }
     return defaultInterval;
+}
+
+// Validate the configured popup policy; anything unrecognized falls back to
+// 'onChange', which notifies only when the status or message actually changed
+// and is therefore safe for sub-minute intervals.
+export function normalizePopupPolicy(value: unknown): PopupPolicy {
+    return value === 'always' || value === 'never' ? value : DEFAULT_POPUP_POLICY;
+}
+
+// Validate the optional per-command run timeout: whole seconds, at least one,
+// at most one hour (3600); anything else falls back to the default.
+export function normalizeTimeoutSeconds(value: unknown): number {
+    const seconds = Math.round(Number(value));
+    return Number.isFinite(seconds) && seconds >= 1 && seconds <= 3600
+        ? seconds
+        : DEFAULT_TIMEOUT_SECONDS;
 }
 
 // Look up the MachineSetting whose machineName matches the current host.
